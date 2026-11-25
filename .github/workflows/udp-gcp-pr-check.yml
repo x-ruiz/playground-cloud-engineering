@@ -1,0 +1,182 @@
+name: UDP GCP — PR Check & Plan
+
+on:
+  pull_request:
+    paths:
+      - "platform_unified_data_gcp/**"
+      - ".github/workflows/udp-gcp-*.yml"
+
+permissions: {}
+
+env:
+  OPENTOFU_VERSION: "1.9.0"
+  TFLINT_VERSION: "0.55.1"
+  TRIVY_VERSION: "0.58.1"
+  PROJECT_DIR: "platform_unified_data_gcp"
+
+jobs:
+  static-checks:
+    name: Static Checks, Security Scan & Mocked Unit Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+
+      - name: Check OpenTofu formatting
+        run: tofu fmt -check -recursive -diff ${{ env.PROJECT_DIR }}/infra
+
+      - name: Validate OpenTofu roots and modules
+        run: |
+          for dir in \
+            "${{ env.PROJECT_DIR }}/infra/bootstrap" \
+            "${{ env.PROJECT_DIR }}/infra/modules/project_factory" \
+            "${{ env.PROJECT_DIR }}/infra/modules/vpc_network" \
+            "${{ env.PROJECT_DIR }}/infra/modules/budget_guardrail" \
+            "${{ env.PROJECT_DIR }}/infra/envs/dev"
+          do
+            echo "=== Validating ${dir} ==="
+            tofu -chdir="${dir}" init -backend=false -input=false
+            tofu -chdir="${dir}" validate
+          done
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v${{ env.TFLINT_VERSION }}
+
+      - name: Initialize and run TFLint (Google ruleset)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          tflint --init --config="$(pwd)/.tflint.hcl"
+          tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=infra
+
+      - name: Run Trivy IaC security scan
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: "config"
+          scan-ref: "${{ env.PROJECT_DIR }}/infra"
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+          ignore-unfixed: false
+          trivyignores: "${{ env.PROJECT_DIR }}/.trivyignore"
+
+      - name: Run bootstrap preflight script syntax & mocked unit tests
+        run: |
+          bash -n "${{ env.PROJECT_DIR }}/scripts/bootstrap_init.sh"
+          bash "${{ env.PROJECT_DIR }}/scripts/test_bootstrap_init.sh"
+
+      - name: Run OpenTofu mocked unit tests
+        run: |
+          for dir in \
+            "${{ env.PROJECT_DIR }}/infra/bootstrap" \
+            "${{ env.PROJECT_DIR }}/infra/modules/project_factory" \
+            "${{ env.PROJECT_DIR }}/infra/modules/vpc_network" \
+            "${{ env.PROJECT_DIR }}/infra/modules/budget_guardrail" \
+            "${{ env.PROJECT_DIR }}/infra/envs/dev"
+          do
+            echo "=== Testing ${dir} ==="
+            tofu -chdir="${dir}" test -verbose
+          done
+
+  plan-dev:
+    name: Plan Dev (Read-Only WIF)
+    runs-on: ubuntu-latest
+    needs: static-checks
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    env:
+      TF_VAR_platform_folder_id: ${{ vars.UDP_GCP_PLATFORM_FOLDER_ID }}
+      TF_VAR_billing_account_id: ${{ vars.UDP_GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_project_id: ${{ vars.UDP_GCP_DEV_PROJECT_ID }}
+      TF_VAR_budget_alert_email: ${{ vars.UDP_GCP_BUDGET_ALERT_EMAIL }}
+      TF_VAR_state_kms_key_id: ${{ vars.UDP_GCP_STATE_KMS_KEY_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+
+      - name: Authenticate to GCP via WIF (Read-Only Plan SA)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.UDP_GCP_PLAN_SA }}
+
+      - name: Initialize OpenTofu (Dev)
+        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/dev
+        run: |
+          tofu init -input=false \
+            -backend-config="bucket=${{ vars.UDP_GCP_STATE_BUCKET }}"
+
+      - name: Run Read-Only OpenTofu Plan (Dev)
+        id: plan
+        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/dev
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          tofu plan -lock=false -input=false -no-color 2>&1 | tee plan_output.txt
+
+      - name: Post Plan Summary to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const planPath = '${{ env.PROJECT_DIR }}/infra/envs/dev/plan_output.txt';
+            let plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : 'Plan output unavailable.';
+            const maxLen = 60000;
+            if (plan.length > maxLen) {
+              plan = plan.slice(0, maxLen) + '\n... (truncated)';
+            }
+            const marker = '<!-- udp-gcp-dev-plan -->';
+            const status = '${{ steps.plan.outcome }}' === 'success' ? 'Succeeded' : 'Failed';
+            const body = [
+              marker,
+              `### OpenTofu Plan (\`platform_unified_data_gcp/infra/envs/dev\`) — **${status}**`,
+              '',
+              '<details><summary>Show Plan Output</summary>',
+              '',
+              '```hcl',
+              plan,
+              '```',
+              '</details>',
+              '',
+              `*Actor: @${context.actor} | Workflow: \`${context.workflow}\` | Commit: \`${context.sha.slice(0, 7)}\`*`
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail job if plan failed
+        if: steps.plan.outcome != 'success'
+        run: exit 1

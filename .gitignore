@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# OpenTofu / Terraform working directories & state (never commit state!)
+**/.terraform/
+**/.tofu/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Variable files (commit *.tfvars.example only)
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!*.tfvars.json.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration & credentials
+.terraformrc
+terraform.rc
+.tofurc
+*.json.key
+*-credentials.json
+
+# NOTE: .terraform.lock.hcl MUST be committed for reproducible provider pins.
