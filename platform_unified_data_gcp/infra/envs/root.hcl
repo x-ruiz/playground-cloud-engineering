@@ -6,11 +6,13 @@
 terraform_binary = "tofu"
 
 locals {
-  offline_test     = get_env("UDP_GCP_OFFLINE_TEST", "false") == "true"
-  region           = get_env("UDP_GCP_REGION", "us-central1")
-  state_bucket     = local.offline_test ? "offline-placeholder-bucket" : get_env("UDP_GCP_STATE_BUCKET")
-  state_kms_key_id = local.offline_test ? "offline-placeholder-kms-key" : get_env("UDP_GCP_STATE_KMS_KEY_ID")
-  env_rel_path     = path_relative_to_include()
+  offline_test         = get_env("UDP_GCP_OFFLINE_TEST", "false") == "true"
+  ephemeral_plan_state = get_env("UDP_GCP_EPHEMERAL_PLAN_STATE", "false") == "true"
+  disable_remote_state = local.offline_test || local.ephemeral_plan_state
+  region               = get_env("UDP_GCP_REGION", "us-central1")
+  state_bucket         = local.disable_remote_state ? "offline-placeholder-bucket" : get_env("UDP_GCP_STATE_BUCKET")
+  state_kms_key_id     = local.disable_remote_state ? "offline-placeholder-kms-key" : get_env("UDP_GCP_STATE_KMS_KEY_ID")
+  env_rel_path         = path_relative_to_include()
 
   module_versions = yamldecode(file("${get_parent_terragrunt_dir()}/../module-versions.yaml")).modules
 }
@@ -18,7 +20,7 @@ locals {
 generate "backend" {
   path      = "backend.tf"
   if_exists = "overwrite_terragrunt"
-  disable   = local.offline_test
+  disable   = local.disable_remote_state
   contents  = <<-EOF
     terraform {
       backend "gcs" {
@@ -32,7 +34,7 @@ generate "backend" {
 generate "encryption" {
   path      = "encryption.tf"
   if_exists = "overwrite_terragrunt"
-  disable   = local.offline_test
+  disable   = local.disable_remote_state
   contents  = <<-EOF
     terraform {
       encryption {

@@ -180,9 +180,23 @@ jobs:
           workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
           service_account: ${{ vars.UDP_GCP_PLAN_SA }}
 
+      - name: Check whether remote state exists for ${{ matrix.env }}
+        id: state_check
+        run: |
+          set -euo pipefail
+          if gcloud storage objects describe "gs://${UDP_GCP_STATE_BUCKET}/envs/${{ matrix.env }}/default.tfstate" >/dev/null 2>&1; then
+            echo "ephemeral=false" >> "$GITHUB_OUTPUT"
+            echo "Found existing encrypted remote state for envs/${{ matrix.env }}."
+          else
+            echo "ephemeral=true" >> "$GITHUB_OUTPUT"
+            echo "No remote state exists yet for envs/${{ matrix.env }}; planning against empty ephemeral state (read-only SA cannot create .tfstate)."
+          fi
+
       - name: Run Read-Only Terragrunt Plan (${{ matrix.env }})
         id: plan
         working-directory: ${{ env.PROJECT_DIR }}/infra/envs/${{ matrix.env }}
+        env:
+          UDP_GCP_EPHEMERAL_PLAN_STATE: ${{ steps.state_check.outputs.ephemeral }}
         continue-on-error: true
         run: |
           set -o pipefail
