@@ -4,7 +4,7 @@ OpenTofu + Terragrunt GCP foundation and GitOps platform governed by lifecycle-s
 - [Spec 01: GCP Org Bootstrap, KMS State & Keyless WIF](./specs/01_gcp_bootstrap_and_wif.md)
 - [Spec 02: Reusable GCP Core Modules](./specs/02_gcp_core_modules.md) *(Superseded by Spec 03)*
 - [Spec 03: Tag-Pinned Platform Module & DRY Terragrunt Environments (`dev`/`uat`/`prod`)](./specs/03_platform_and_terragrunt_envs.md)
-- [Spec 04: GitHub Actions GitOps CI/CD Pipelines](./specs/04_github_actions_cicd.md)
+- [Spec 04: GitHub Actions GitOps CI/CD & Tag-Based Environment Promotion](./specs/04_github_actions_cicd.md)
 
 ## Architecture Overview
 
@@ -12,10 +12,11 @@ OpenTofu + Terragrunt GCP foundation and GitOps platform governed by lifecycle-s
 - **Zero Local Module Duplication:** `infra/platform/` sources official public GitHub GCP modules directly by immutable release tag (`GoogleCloudPlatform/cloud-foundation-fabric` `v60.0.0` for `project`, `net-vpc`, `net-vpc-firewall`, opt-in `net-cloudnat`; `terraform-google-modules/terraform-google-project-factory` `v18.4.0` for `budget`).
 - **Org & Project Topology:** One-time `infra/bootstrap/` creates a dedicated **Platform Folder** under your GCP Organization, a **Seed Project** (GCS versioned state bucket + Cloud KMS state encryption key + GitHub Actions WIF Pool/Provider), **dual CI Service Accounts** scoped strictly to the Platform Folder (zero Org-wide roles), and declarative GitHub Actions repository variables via `integrations/github`.
 - **Keyless GitOps (GitHub Actions + WIF):**
-  - `sa-tofu-plan`: Read-only on Folder/Projects/GCS/KMS; runs `terragrunt plan -lock=false` across `dev`/`uat`/`prod` on PRs.
-  - `sa-tofu-apply`: Restricted server-side via WIF attribute condition to `refs/heads/main`; auto-applies `dev` on merge and gates `uat`/`prod` behind GitHub Environment approvals.
+  - `sa-tofu-plan`: Read-only on Folder/Projects/GCS/KMS; runs `terragrunt plan -lock=false` on PRs for **only the environments affected by the diff**.
+  - `sa-tofu-apply`: Restricted server-side via WIF attribute condition to `refs/heads/main`; on merge applies **only the affected environment(s)**.
+- **Trunk-Based Tag Promotion:** `infra/platform/` (with its atomic `module-versions.yaml`) is released as immutable annotated Git tags `udp-gcp-vX.Y.Z`. `dev` tracks `main` HEAD; `uat` and `prod` each pin a tag in `infra/envs/<env>/release.yaml`, so merges to `infra/platform/**` never touch `uat`/`prod` until promoted via a 1-line Promotion PR.
 - **DRY Terragrunt Wrappers (`infra/envs/{root.hcl, dev, uat, prod}`):**
-  - `infra/envs/root.hcl` dynamically generates `backend.tf` (`envs/<env>` prefix), `encryption.tf` (Cloud KMS), and `provider.tf` (`google` + `google-beta`) with zero `.tf` files inside `infra/envs/`.
+  - `infra/envs/root.hcl` exposes `platform_git_source` and dynamically generates `backend.tf` (`envs/<env>` prefix), `encryption.tf` (Cloud KMS), and `provider.tf` (`google` + `google-beta`) with zero `.tf` files inside `infra/envs/`.
 
 ## Local Prerequisites
 
@@ -35,9 +36,11 @@ All static checks, security scans, and mocked unit tests run locally with zero G
 tofu fmt -check -recursive platform_unified_data_gcp/infra
 terragrunt hcl fmt --check --working-dir platform_unified_data_gcp/infra/envs
 
-# Validate Bootstrap (OpenTofu) & Platform (Terragrunt native generation, offline mode)
+# Validate Bootstrap & Platform (OpenTofu) and envs (Terragrunt native generation, offline mode)
 tofu -chdir="platform_unified_data_gcp/infra/bootstrap" init -backend=false
 tofu -chdir="platform_unified_data_gcp/infra/bootstrap" validate
+tofu -chdir="platform_unified_data_gcp/infra/platform" init -backend=false
+tofu -chdir="platform_unified_data_gcp/infra/platform" validate
 UDP_GCP_OFFLINE_TEST=true terragrunt init --non-interactive --working-dir platform_unified_data_gcp/infra/envs/dev -backend=false
 UDP_GCP_OFFLINE_TEST=true terragrunt validate --non-interactive --working-dir platform_unified_data_gcp/infra/envs/dev
 
@@ -47,15 +50,36 @@ UDP_GCP_OFFLINE_TEST=true terragrunt validate --non-interactive --working-dir pl
 # Trivy IaC security scan (excluding downloaded .terraform / .terragrunt-cache vendor dirs)
 trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/.terraform' --skip-dirs '**/.terragrunt-cache' platform_unified_data_gcp/infra
 
-# Mocked unit tests (Bootstrap + Platform via Terragrunt + Preflight Script)
+# Mocked unit tests (Bootstrap + Platform direct & via Terragrunt + Preflight & CI change-detection scripts)
 ./platform_unified_data_gcp/scripts/test_bootstrap_init.sh
+./platform_unified_data_gcp/scripts/test_detect_affected_envs.sh
 tofu -chdir="platform_unified_data_gcp/infra/bootstrap" test -verbose
+tofu -chdir="platform_unified_data_gcp/infra/platform" test -verbose
 UDP_GCP_OFFLINE_TEST=true terragrunt test --non-interactive --working-dir platform_unified_data_gcp/infra/envs/dev -verbose
 ```
 
 ## Updating Upstream Module Versions (DRY — Zero Sync Scripts)
 
-Edit the pinned semantic release tag once in [`infra/module-versions.yaml`](./infra/module-versions.yaml). Terragrunt's [`infra/envs/root.hcl`](./infra/envs/root.hcl) reads it via `yamldecode(file(...))` and passes `cff_version` / `project_factory_version` as standard inputs into [`infra/platform/main.tf`](./infra/platform/main.tf) (via OpenTofu 1.8+ Early Variable Evaluation in `module.source`)—no sync scripts or generated module files needed.
+Edit the pinned semantic release tag once in [`infra/platform/module-versions.yaml`](./infra/platform/module-versions.yaml). [`infra/platform/main.tf`](./infra/platform/main.tf) reads it natively via `yamldecode(file("${path.module}/module-versions.yaml"))` into early-evaluated `locals` and interpolates `?ref=${local.cff_version}` / `?ref=${local.project_factory_version}` in `module.source` (OpenTofu 1.8+ Early Evaluation)—no sync scripts or generated module files needed. Because the manifest lives inside `infra/platform/`, an upstream bump rolls out to `dev` only and reaches `uat`/`prod` inside the next promoted `udp-gcp-vX.Y.Z` tag.
+
+## Environment Promotion (`dev` → `uat` → `prod`)
+
+| Change | PR Check plans | Merge applies |
+| :--- | :--- | :--- |
+| `infra/platform/**` (incl. `module-versions.yaml`), `infra/envs/dev/**` | `dev` | `dev` |
+| `infra/envs/uat/**` (incl. `release.yaml`) | `uat` (if released) | `uat` |
+| `infra/envs/prod/**` (incl. `release.yaml`) | `prod` (if released) | `prod` |
+| `infra/envs/root.hcl` | `dev` + released `uat`/`prod` | `dev` → `uat` → `prod` |
+| `infra/bootstrap/**`, `scripts/**`, `specs/**`, docs | none (static checks only) | none |
+
+1. **Develop:** merge feature PRs to `main`; they plan and deploy `dev` only. Ship new capabilities behind opt-in `enable_*` flags defaulting to `false`.
+2. **Promote `dev` → `uat`:** run **Actions → UDP GCP — Promote Platform Release** with `promotion=dev-to-uat` and a `bump` (`patch | minor | major`; the first release is always `udp-gcp-v0.1.0`). It cuts an annotated tag on `main` HEAD (or reuses one already there) and opens a Promotion PR bumping `infra/envs/uat/release.yaml`, including the commit changelog, file stats and the HCL diff. Review the `uat` plan comment and merge to deploy `uat` only.
+3. **Promote `uat` → `prod`:** run the same workflow with `promotion=uat-to-prod`. It never cuts a new tag — it promotes the exact tag in `uat/release.yaml` — and opens a Promotion PR for `prod`.
+4. **Rollback:** revert the Promotion PR; the 1-line `release.yaml` revert plans and applies the previous tag for that environment only.
+
+> **Promotion PR checks:** PRs opened with the default `GITHUB_TOKEN` do not trigger `udp-gcp-pr-check.yml` (GitHub anti-recursion rule). Add an optional `UDP_GCP_PROMOTE_TOKEN` repository secret (fine-grained PAT, `contents: write` + `pull-requests: write` on this repo) so Promotion PRs are planned automatically; otherwise close & reopen the PR.
+>
+> **Local `uat`/`prod` runs:** Terragrunt fetches `${platform_git_source}?ref=<tag>` over HTTPS from this private repository—run `gh auth setup-git` once, or export `UDP_GCP_PLATFORM_REPO` with an SSH URL (e.g. `git@github.com:<owner>/<repo>.git`). While `release.yaml` is `"unreleased"`, `uat`/`prod` cannot be planned (CI skips them).
 
 ## One-Time Bootstrap & Cloud KMS State Migration Runbook
 
@@ -137,5 +161,5 @@ All 9 GitHub Actions repository variables below are **automatically provisioned 
    ```bash
    git subtree split --prefix=platform_unified_data_gcp -b graduate-udp-gcp
    ```
-2. Copy `.github/workflows/udp-gcp-*.yml` into the new repository's `.github/workflows/` and set `PROJECT_DIR: "."` (and update path filters to `infra/**`).
+2. Copy `.github/workflows/udp-gcp-*.yml` (`pr-check`, `apply`, `promote`) into the new repository's `.github/workflows/` and set `PROJECT_DIR: "."` (and update path filters to `infra/**`). `UDP_GCP_PLATFORM_REPO` is derived from `github.repository` in CI, and `root.hcl` derives the `infra/platform` subpath from the Git root, so tagged sources follow automatically (override `UDP_GCP_PLATFORM_REPO` locally if needed). Push the existing `udp-gcp-v*` tags to the new repository so `release.yaml` pins keep resolving.
 3. Update `github_repository` in `infra/bootstrap/terraform.tfvars` and apply bootstrap to re-bind the WIF `attribute_condition` to the new repository.

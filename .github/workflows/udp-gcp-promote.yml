@@ -1,0 +1,278 @@
+name: UDP GCP — Promote Platform Release (dev -> uat -> prod)
+
+# Spec 04 REQ-07: single linear release train of immutable annotated tags (udp-gcp-vX.Y.Z).
+#   dev-to-uat : cut (or reuse) a tag on main HEAD and open a 1-line PR bumping envs/uat/release.yaml
+#   uat-to-prod: promote the exact tag running in uat by opening a 1-line PR bumping envs/prod/release.yaml
+# Holds zero GCP permissions; the Promotion PR (plan comment + HCL diff) is the approval gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      promotion:
+        description: "Promotion path"
+        required: true
+        default: "dev-to-uat"
+        type: choice
+        options:
+          - dev-to-uat
+          - uat-to-prod
+      bump:
+        description: "Semver bump for dev-to-uat (ignored for uat-to-prod; first release is always v0.1.0)"
+        required: true
+        default: "minor"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions: {}
+
+concurrency:
+  group: udp-gcp-promote
+  cancel-in-progress: false
+
+env:
+  PROJECT_DIR: "platform_unified_data_gcp"
+  TAG_PREFIX: "udp-gcp-v"
+
+jobs:
+  promote:
+    name: Promote (${{ inputs.promotion }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      PROMOTION: ${{ inputs.promotion }}
+      BUMP: ${{ inputs.bump }}
+      HAS_PROMOTE_TOKEN: ${{ secrets.UDP_GCP_PROMOTE_TOKEN != '' }}
+      GH_TOKEN: ${{ secrets.UDP_GCP_PROMOTE_TOKEN || github.token }}
+    steps:
+      - name: Guard — promotions run from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "ERROR: udp-gcp-promote.yml must be dispatched from main (got ${GITHUB_REF})." >&2
+          exit 1
+
+      - name: Checkout main with full history & tags
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.UDP_GCP_PROMOTE_TOKEN || github.token }}
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve release tags
+        id: resolve
+        run: |
+          set -euo pipefail
+          read_pin() {
+            sed -nE 's/^platform_version:[[:space:]]*"?([^"#[:space:]]*)"?.*$/\1/p' "${PROJECT_DIR}/infra/envs/$1/release.yaml" | head -n 1
+          }
+          semver_re="^${TAG_PREFIX}([0-9]+)\.([0-9]+)\.([0-9]+)$"
+
+          case "$PROMOTION" in
+            dev-to-uat)
+              source_env="dev"; target_env="uat"
+              platform_path="${PROJECT_DIR}/infra/platform"
+              [[ "$PROJECT_DIR" == "." ]] && platform_path="infra/platform"
+              target_tag="$(git tag --points-at HEAD --list "${TAG_PREFIX}*" | grep -E "$semver_re" | sort -V | tail -n 1 || true)"
+              if [[ -n "$target_tag" ]]; then
+                echo "main HEAD is already tagged ${target_tag}; reusing it (no duplicate tag)."
+                new_tag=false
+              else
+                latest="$(git tag --list "${TAG_PREFIX}*" | grep -E "$semver_re" | sort -V | tail -n 1 || true)"
+                if [[ -n "$latest" ]] && git diff --quiet "$latest" HEAD -- "$platform_path"; then
+                  echo "No files under ${platform_path} changed since ${latest}; reusing ${latest} instead of cutting an empty tag."
+                  target_tag="$latest"
+                  new_tag=false
+                elif [[ -z "$latest" ]]; then
+                  target_tag="${TAG_PREFIX}0.1.0"
+                  new_tag=true
+                else
+                  [[ "$latest" =~ $semver_re ]]
+                  major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+                  case "$BUMP" in
+                    major) target_tag="${TAG_PREFIX}$((major + 1)).0.0" ;;
+                    minor) target_tag="${TAG_PREFIX}${major}.$((minor + 1)).0" ;;
+                    patch) target_tag="${TAG_PREFIX}${major}.${minor}.$((patch + 1))" ;;
+                    *) echo "ERROR: invalid bump '${BUMP}'." >&2; exit 1 ;;
+                  esac
+                  new_tag=true
+                fi
+              fi
+              ;;
+            uat-to-prod)
+              source_env="uat"; target_env="prod"
+              target_tag="$(read_pin uat)"
+              if [[ "$target_tag" == "unreleased" ]]; then
+                echo "ERROR: uat is \"unreleased\"; run dev-to-uat and merge its Promotion PR first." >&2
+                exit 1
+              fi
+              if [[ ! "$target_tag" =~ $semver_re ]] || ! git rev-parse -q --verify "refs/tags/${target_tag}" >/dev/null; then
+                echo "ERROR: uat pin '${target_tag}' is not an existing ${TAG_PREFIX}X.Y.Z tag." >&2
+                exit 1
+              fi
+              new_tag=false
+              ;;
+            *)
+              echo "ERROR: unknown promotion '${PROMOTION}'." >&2
+              exit 1
+              ;;
+          esac
+
+          prev_tag="$(read_pin "$target_env")"
+          if [[ "$prev_tag" == "$target_tag" ]]; then
+            echo "ERROR: ${target_env} is already pinned to ${target_tag}; nothing to promote." >&2
+            exit 1
+          fi
+
+          {
+            echo "source_env=${source_env}"
+            echo "target_env=${target_env}"
+            echo "target_tag=${target_tag}"
+            echo "prev_tag=${prev_tag}"
+            echo "new_tag=${new_tag}"
+            echo "branch=promote/${target_env}-${target_tag}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Promoting ${source_env} -> ${target_env}: ${prev_tag} -> ${target_tag} (new tag: ${new_tag})"
+
+      - name: Cut & push annotated release tag
+        if: steps.resolve.outputs.new_tag == 'true'
+        env:
+          TARGET_TAG: ${{ steps.resolve.outputs.target_tag }}
+        run: |
+          set -euo pipefail
+          git tag -a "$TARGET_TAG" -m "chore(udp-gcp): release ${TARGET_TAG}" -m "Platform release cut from main@$(git rev-parse --short HEAD) by ${GITHUB_ACTOR} via udp-gcp-promote.yml."
+          git push origin "refs/tags/${TARGET_TAG}"
+
+      - name: Commit release pin to promotion branch
+        env:
+          TARGET_ENV: ${{ steps.resolve.outputs.target_env }}
+          TARGET_TAG: ${{ steps.resolve.outputs.target_tag }}
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git switch -C "$BRANCH"
+          cat > "${PROJECT_DIR}/infra/envs/${TARGET_ENV}/release.yaml" <<EOF
+          # Managed by .github/workflows/udp-gcp-promote.yml
+          # Allowed values: "unreleased" (Day-0 pre-promotion) or "udp-gcp-vX.Y.Z"
+          platform_version: "${TARGET_TAG}"
+          EOF
+          git add "${PROJECT_DIR}/infra/envs/${TARGET_ENV}/release.yaml"
+          git commit -m "chore(udp-gcp): promote ${TARGET_ENV} to ${TARGET_TAG}"
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
+
+      - name: Build Promotion PR body (changelog, file stats & HCL diff)
+        env:
+          SOURCE_ENV: ${{ steps.resolve.outputs.source_env }}
+          TARGET_ENV: ${{ steps.resolve.outputs.target_env }}
+          TARGET_TAG: ${{ steps.resolve.outputs.target_tag }}
+          PREV_TAG: ${{ steps.resolve.outputs.prev_tag }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          platform_path="${PROJECT_DIR}/infra/platform"
+          [[ "$PROJECT_DIR" == "." ]] && platform_path="infra/platform"
+          target_sha="$(git rev-list -n 1 "$TARGET_TAG")"
+          body="${RUNNER_TEMP}/pr_body.md"
+
+          if [[ "$PREV_TAG" == "unreleased" ]]; then
+            range="$TARGET_TAG"
+            range_label="initial release (full history up to \`${TARGET_TAG}\`)"
+            compare_url="${REPO_URL}/tree/${TARGET_TAG}/${platform_path}"
+          else
+            range="${PREV_TAG}..${TARGET_TAG}"
+            range_label="\`${PREV_TAG}..${TARGET_TAG}\`"
+            compare_url="${REPO_URL}/compare/${PREV_TAG}...${TARGET_TAG}"
+          fi
+
+          changelog="$(git log -n 200 --no-merges --pretty='- %h %s (%an)' "$range" -- "$platform_path")"
+          [[ -z "$changelog" ]] && changelog="_No commits touched \`${platform_path}\` in this range._"
+          if [[ "$PREV_TAG" == "unreleased" ]]; then
+            stat="$(git diff --stat "$(git hash-object -t tree /dev/null)" "$TARGET_TAG" -- "$platform_path")"
+            diff="$(git diff "$(git hash-object -t tree /dev/null)" "$TARGET_TAG" -- "$platform_path")"
+          else
+            stat="$(git diff --stat "$range" -- "$platform_path")"
+            diff="$(git diff "$range" -- "$platform_path")"
+          fi
+          [[ -z "$stat" ]] && stat="(no changes under ${platform_path})"
+
+          max_diff=45000
+          if (( ${#diff} > max_diff )); then
+            diff="${diff:0:max_diff}"$'\n'"... (diff truncated; see full compare view: ${compare_url})"
+          fi
+
+          {
+            echo "## Platform Promotion: \`${SOURCE_ENV}\` → \`${TARGET_ENV}\`"
+            echo
+            echo "| Field | Value |"
+            echo "| :--- | :--- |"
+            echo "| Target environment | \`${TARGET_ENV}\` (\`${PROJECT_DIR}/infra/envs/${TARGET_ENV}/release.yaml\`) |"
+            echo "| Release | \`${PREV_TAG}\` → \`${TARGET_TAG}\` |"
+            echo "| Tagged commit | \`${target_sha}\` |"
+            echo "| Compare | ${compare_url} |"
+            echo "| Triggered by | @${GITHUB_ACTOR} |"
+            echo
+            if [[ "$HAS_PROMOTE_TOKEN" != "true" ]]; then
+              echo "> [!WARNING]"
+              echo "> This PR was opened with \`GITHUB_TOKEN\`, so GitHub's anti-recursion rule prevents \`udp-gcp-pr-check.yml\` from starting automatically."
+              echo "> Close & reopen this PR (or push an empty commit) to run the \`${TARGET_ENV}\` plan, or configure the \`UDP_GCP_PROMOTE_TOKEN\` repository secret."
+              echo
+            fi
+            echo "Review the live \`terragrunt plan\` comment for \`${TARGET_ENV}\` posted by \`udp-gcp-pr-check.yml\` alongside the HCL diff below. Merging applies **\`${TARGET_ENV}\` only**; rollback = revert this PR."
+            echo
+            echo "### Commit changelog (${range_label})"
+            echo
+            echo "$changelog"
+            echo
+            echo "### Changed OpenTofu & module-version files"
+            echo
+            echo '```text'
+            echo "$stat"
+            echo '```'
+            echo
+            echo "<details><summary>Show Terraform / HCL diff (<code>${platform_path}</code>)</summary>"
+            echo
+            echo '```diff'
+            echo "$diff"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "---"
+            echo "*Generated by \`udp-gcp-promote.yml\` (run ${REPO_URL}/actions/runs/${GITHUB_RUN_ID}).*"
+          } > "$body"
+
+          # Hard guard below GitHub's 65,536-char PR body limit.
+          if (( $(wc -c < "$body") > 65000 )); then
+            head -c 64000 "$body" > "${body}.tmp"
+            printf '\n```\n</details>\n\n... (body truncated; see %s)\n' "$compare_url" >> "${body}.tmp"
+            mv "${body}.tmp" "$body"
+          fi
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update Promotion PR
+        env:
+          TARGET_ENV: ${{ steps.resolve.outputs.target_env }}
+          TARGET_TAG: ${{ steps.resolve.outputs.target_tag }}
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+        run: |
+          set -euo pipefail
+          title="chore(udp-gcp): promote ${TARGET_ENV} to ${TARGET_TAG}"
+          existing="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh pr edit "$existing" --title "$title" --body-file "${RUNNER_TEMP}/pr_body.md"
+            url="$(gh pr view "$existing" --json url --jq .url)"
+            echo "Updated existing Promotion PR: ${url}"
+          else
+            url="$(gh pr create --base main --head "$BRANCH" --title "$title" --body-file "${RUNNER_TEMP}/pr_body.md")"
+            echo "Opened Promotion PR: ${url}"
+          fi
+          echo "### Promotion PR: ${url}" >> "$GITHUB_STEP_SUMMARY"

@@ -1,18 +1,21 @@
-name: UDP GCP — Apply Environments (dev -> uat -> prod)
+name: UDP GCP — Directory-Scoped Apply
+
+# Spec 04 (Trunk-Based GitOps): on push to main, apply ONLY the environments affected by the
+# diff. infra/platform/** deploys dev only; uat/prod deploy only when their envs/<env>/** files
+# (e.g. a Promotion PR bumping release.yaml) change. root.hcl changes apply dev -> uat -> prod.
 
 on:
   push:
     branches:
       - main
     paths:
-      - "platform_unified_data_gcp/infra/module-versions.yaml"
       - "platform_unified_data_gcp/infra/platform/**"
       - "platform_unified_data_gcp/infra/envs/**"
       - ".github/workflows/udp-gcp-apply.yml"
   workflow_dispatch:
     inputs:
       target_env:
-        description: "Environment to apply (dev, uat, or prod)"
+        description: "Single released environment to (re-)apply from main"
         required: true
         default: "dev"
         type: choice
@@ -27,6 +30,7 @@ env:
   OPENTOFU_VERSION: "1.13.10"
   TERRAGRUNT_VERSION: "1.2.2"
   PROJECT_DIR: "platform_unified_data_gcp"
+  UDP_GCP_PLATFORM_REPO: "https://github.com/${{ github.repository }}.git"
   TG_TF_PATH: "tofu"
   UDP_GCP_STATE_BUCKET: ${{ vars.UDP_GCP_STATE_BUCKET }}
   UDP_GCP_STATE_KMS_KEY_ID: ${{ vars.UDP_GCP_STATE_KMS_KEY_ID }}
@@ -38,9 +42,57 @@ env:
   UDP_GCP_PROD_PROJECT_ID: ${{ vars.UDP_GCP_PROD_PROJECT_ID || 'udp-prod' }}
 
 jobs:
+  detect-changes:
+    name: Detect Affected Environments
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      apply_dev: ${{ steps.detect.outputs.apply_dev }}
+      apply_uat: ${{ steps.detect.outputs.apply_uat }}
+      apply_prod: ${{ steps.detect.outputs.apply_prod }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute target environments
+        id: detect
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          TARGET_ENV: ${{ inputs.target_env }}
+        run: |
+          set -euo pipefail
+          detect="${PROJECT_DIR}/scripts/detect_affected_envs.sh"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            released="$(bash "$detect" --all "${PROJECT_DIR}" < /dev/null)"
+            if [[ "$released" != *"\"${TARGET_ENV}\""* ]]; then
+              echo "ERROR: ${TARGET_ENV} is not released (infra/envs/${TARGET_ENV}/release.yaml is \"unreleased\"). Promote it first via udp-gcp-promote.yml." >&2
+              exit 1
+            fi
+            envs="[\"${TARGET_ENV}\"]"
+          else
+            if [[ -z "${BEFORE_SHA}" || "${BEFORE_SHA}" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              BEFORE_SHA="$(git rev-parse HEAD^1)"
+            fi
+            git diff --name-only "${BEFORE_SHA}" HEAD | tee changed_files.txt
+            envs="$(bash "$detect" "${PROJECT_DIR}" < changed_files.txt)"
+          fi
+          echo "Target environments: ${envs}"
+          echo "### Target environments: \`${envs}\`" >> "$GITHUB_STEP_SUMMARY"
+          for env in dev uat prod; do
+            if [[ "$envs" == *"\"${env}\""* ]]; then
+              echo "apply_${env}=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "apply_${env}=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
   apply-dev:
-    name: Apply Dev (Main-Only WIF)
-    if: github.event_name == 'push' || inputs.target_env == 'dev'
+    name: Apply dev (Main-Only WIF)
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.apply_dev == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: udp-gcp-dev-apply
@@ -70,19 +122,26 @@ jobs:
           workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
           service_account: ${{ vars.UDP_GCP_APPLY_SA }}
 
-      - name: Terragrunt Init, Plan & Apply (dev)
+      - name: Terragrunt Init, Plan & Apply (dev @ main HEAD)
         working-directory: ${{ env.PROJECT_DIR }}/infra/envs/dev
         run: |
+          set -euo pipefail
           terragrunt init --non-interactive -input=false
           terragrunt plan --non-interactive -input=false -no-color -out=tfplan
           terragrunt apply --non-interactive -input=false -no-color -auto-approve tfplan
 
   apply-uat:
-    name: Apply UAT (Gated Approval)
-    if: always() && ((github.event_name == 'push' && needs.apply-dev.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'uat'))
-    needs: [apply-dev]
+    name: Apply uat (Tagged Release, Main-Only WIF)
+    needs: [detect-changes, apply-dev]
+    # Runs only when uat is affected; when root.hcl fans out, waits for dev to succeed first.
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.apply_uat == 'true' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
-    environment: uat
     concurrency:
       group: udp-gcp-uat-apply
       cancel-in-progress: false
@@ -105,25 +164,44 @@ jobs:
           tf_path: tofu
           tg_command: "--version"
 
+      - name: Configure ephemeral Git credentials for private platform tag fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git config --global "url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.insteadOf" "https://github.com/${GITHUB_REPOSITORY}"
+
       - name: Authenticate to GCP via WIF (Apply SA — main only)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
           service_account: ${{ vars.UDP_GCP_APPLY_SA }}
 
-      - name: Terragrunt Init, Plan & Apply (uat)
+      - name: Terragrunt Init, Plan & Apply (uat @ release.yaml tag)
         working-directory: ${{ env.PROJECT_DIR }}/infra/envs/uat
         run: |
+          set -euo pipefail
+          echo "Deploying platform release: $(grep -E '^platform_version:' release.yaml)"
           terragrunt init --non-interactive -input=false
           terragrunt plan --non-interactive -input=false -no-color -out=tfplan
           terragrunt apply --non-interactive -input=false -no-color -auto-approve tfplan
 
+      - name: Remove ephemeral Git credentials
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git config --global --remove-section "url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" || true
+
   apply-prod:
-    name: Apply Prod (Gated Approval)
-    if: always() && ((github.event_name == 'push' && needs.apply-uat.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'prod'))
-    needs: [apply-uat]
+    name: Apply prod (Tagged Release, Main-Only WIF)
+    needs: [detect-changes, apply-dev, apply-uat]
+    # Runs only when prod is affected; when root.hcl fans out, waits for dev and uat to succeed.
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.apply_prod == 'true' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
-    environment: prod
     concurrency:
       group: udp-gcp-prod-apply
       cancel-in-progress: false
@@ -146,15 +224,28 @@ jobs:
           tf_path: tofu
           tg_command: "--version"
 
+      - name: Configure ephemeral Git credentials for private platform tag fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git config --global "url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.insteadOf" "https://github.com/${GITHUB_REPOSITORY}"
+
       - name: Authenticate to GCP via WIF (Apply SA — main only)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
           service_account: ${{ vars.UDP_GCP_APPLY_SA }}
 
-      - name: Terragrunt Init, Plan & Apply (prod)
+      - name: Terragrunt Init, Plan & Apply (prod @ release.yaml tag)
         working-directory: ${{ env.PROJECT_DIR }}/infra/envs/prod
         run: |
+          set -euo pipefail
+          echo "Deploying platform release: $(grep -E '^platform_version:' release.yaml)"
           terragrunt init --non-interactive -input=false
           terragrunt plan --non-interactive -input=false -no-color -out=tfplan
           terragrunt apply --non-interactive -input=false -no-color -auto-approve tfplan
+
+      - name: Remove ephemeral Git credentials
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git config --global --remove-section "url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" || true

@@ -1,23 +1,3 @@
-variable "cff_version" {
-  description = "Pinned semantic release tag for GoogleCloudPlatform/cloud-foundation-fabric (passed by root.hcl from infra/module-versions.yaml)."
-  type        = string
-
-  validation {
-    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", var.cff_version))
-    error_message = "cff_version must be an immutable semantic release tag (e.g., v60.0.0)."
-  }
-}
-
-variable "project_factory_version" {
-  description = "Pinned semantic release tag for terraform-google-modules/terraform-google-project-factory (passed by root.hcl from infra/module-versions.yaml)."
-  type        = string
-
-  validation {
-    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", var.project_factory_version))
-    error_message = "project_factory_version must be an immutable semantic release tag (e.g., v18.4.0)."
-  }
-}
-
 variable "environment" {
   description = "Deployment environment (dev, uat, or prod)."
   type        = string

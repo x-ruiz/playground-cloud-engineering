@@ -1,6 +1,6 @@
 # Feature Spec: Tag-Pinned Platform Module & DRY Terragrunt Environments (`dev`/`uat`/`prod`)
 
-- **Status:** Draft (Updated for Tag-Based Promotion — Pending Approval)
+- **Status:** Approved
 - **Module / Component:** `platform_unified_data_gcp/infra/platform` (with atomic `module-versions.yaml`) + `platform_unified_data_gcp/infra/envs/{root.hcl, dev, uat, prod}` (OpenTofu `>= 1.12.2`, Terragrunt `>= 0.72`)
 - **Archetype:** Infrastructure-as-Code Contract (DRY Multi-Environment Composition & Immutable Release Tagging)
 - **Tier:** Full Spec

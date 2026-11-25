@@ -1,0 +1,3 @@
+# Managed by .github/workflows/udp-gcp-promote.yml
+# Allowed values: "unreleased" (Day-0 pre-promotion) or "udp-gcp-vX.Y.Z"
+platform_version: "unreleased"

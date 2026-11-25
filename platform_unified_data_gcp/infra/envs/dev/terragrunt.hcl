@@ -1,7 +1,9 @@
 include "root" {
-  path = find_in_parent_folders("root.hcl")
+  path   = find_in_parent_folders("root.hcl")
+  expose = true
 }
 
+# dev tracks infra/platform on main HEAD for fast iteration.
 terraform {
   source = "../../platform//."
 }

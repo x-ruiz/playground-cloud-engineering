@@ -1,23 +1,67 @@
-name: UDP GCP — PR Check & Multi-Env Plan
+name: UDP GCP — PR Check & Scoped Plan
+
+# Spec 04 (Trunk-Based GitOps): static checks always run; read-only plans run ONLY for the
+# environments affected by the diff (infra/platform/** -> dev; envs/<env>/** -> <env>;
+# envs/root.hcl -> dev + released envs). uat/prod plans fetch their immutable udp-gcp-vX.Y.Z tag.
 
 on:
   pull_request:
     paths:
       - "platform_unified_data_gcp/**"
       - ".github/workflows/udp-gcp-*.yml"
+  workflow_dispatch:
 
 permissions: {}
+
+concurrency:
+  group: udp-gcp-pr-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   OPENTOFU_VERSION: "1.13.10"
   TERRAGRUNT_VERSION: "1.2.2"
   TFLINT_VERSION: "0.66.0"
   PROJECT_DIR: "platform_unified_data_gcp"
+  UDP_GCP_PLATFORM_REPO: "https://github.com/${{ github.repository }}.git"
   TG_TF_PATH: "tofu"
 
 jobs:
+  detect-changes:
+    name: Detect Affected Environments
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      envs: ${{ steps.detect.outputs.envs }}
+      has_envs: ${{ steps.detect.outputs.has_envs }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Compute affected released environments
+        id: detect
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # HEAD is the PR merge commit; HEAD^1 is the current base tip -> exact PR delta.
+            git diff --name-only HEAD^1 HEAD | tee changed_files.txt
+            envs="$(bash "${PROJECT_DIR}/scripts/detect_affected_envs.sh" "${PROJECT_DIR}" < changed_files.txt)"
+          else
+            envs="$(bash "${PROJECT_DIR}/scripts/detect_affected_envs.sh" --all "${PROJECT_DIR}" < /dev/null)"
+          fi
+          echo "Affected environments: ${envs}"
+          echo "envs=${envs}" >> "$GITHUB_OUTPUT"
+          if [[ "$envs" == "[]" ]]; then
+            echo "has_envs=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_envs=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "### Affected environments: \`${envs}\`" >> "$GITHUB_STEP_SUMMARY"
+
   static-checks:
-    name: Static Checks, Security Scan & Mocked Unit Tests
+    name: Static Checks, Release Pins, Security Scan & Mocked Unit Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,41 +84,50 @@ jobs:
       - name: Check OpenTofu formatting
         run: tofu fmt -check -recursive -diff ${{ env.PROJECT_DIR }}/infra
 
-      - name: Check Terragrunt HCL formatting, DRY wrappers & module-versions.yaml schema
+      - name: Check Terragrunt formatting, DRY layout, tag pinning & release-pin schema
         run: |
           set -euo pipefail
-          terragrunt hcl fmt --check --working-dir "${{ env.PROJECT_DIR }}/infra/envs"
+          terragrunt hcl fmt --check --working-dir "${PROJECT_DIR}/infra/envs"
 
-          if [[ -d "${{ env.PROJECT_DIR }}/infra/modules" ]]; then
+          if [[ -d "${PROJECT_DIR}/infra/modules" ]]; then
             echo "ERROR: Local infra/modules/ directory is forbidden by Spec 03." >&2
             exit 1
           fi
 
-          if find "${{ env.PROJECT_DIR }}/infra/envs" -name '*.tf' | grep -q .; then
+          if find "${PROJECT_DIR}/infra/envs" -name '*.tf' -not -path '*/.terragrunt-cache/*' | grep -q .; then
             echo "ERROR: Found .tf files inside infra/envs/. Environment directories must contain only terragrunt.hcl wrappers." >&2
             exit 1
           fi
 
-          if grep -rnE '\?ref=[^$]' "${{ env.PROJECT_DIR }}"/infra/platform/*.tf; then
-            echo "ERROR: Hardcoded ?ref= tags found in infra/platform/*.tf; pass tags via variables from infra/module-versions.yaml." >&2
+          if grep -rnE '\?ref=[^$]' "${PROJECT_DIR}"/infra/platform/*.tf; then
+            echo "ERROR: Hardcoded ?ref= tags found in infra/platform/*.tf; use ?ref=\${local.*} from infra/platform/module-versions.yaml." >&2
             exit 1
           fi
 
-          python3 - "${{ env.PROJECT_DIR }}/infra/module-versions.yaml" <<'PY'
+          python3 - "${PROJECT_DIR}/infra/platform/module-versions.yaml" "${PROJECT_DIR}/infra/envs/uat/release.yaml" "${PROJECT_DIR}/infra/envs/prod/release.yaml" <<'PY'
           import re, sys
-          with open(sys.argv[1], encoding="utf-8") as fh:
-              lines = fh.readlines()
-          repos = [m.group(1) for line in lines if (m := re.match(r'^\s+repository:\s*"([^"]+)"\s*$', line))]
-          vers  = [m.group(1) for line in lines if (m := re.match(r'^\s+version:\s*"([^"]+)"\s*$', line))]
-          assert repos and len(repos) == len(vers), "Malformed module-versions.yaml"
+
+          def scalars(path, key):
+              with open(path, encoding="utf-8") as fh:
+                  return [m.group(1) for line in fh if (m := re.match(rf'^\s*{key}:\s*"([^"]*)"\s*(#.*)?$', line))]
+
+          manifest = sys.argv[1]
+          repos, vers = scalars(manifest, "repository"), scalars(manifest, "version")
+          assert repos and len(repos) == len(vers), f"Malformed {manifest}"
           for r in repos:
-              assert re.match(r'^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$', r), f"Bad repo: {r}"
+              assert re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git', r), f"Bad repository URL: {r}"
           for v in vers:
-              assert re.match(r'^v[0-9]+\.[0-9]+\.[0-9]+$', v), f"Non-semver tag (floating refs forbidden): {v}"
-          print(f"Verified {len(repos)} pinned module entries in {sys.argv[1]}")
+              assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', v), f"Non-semver upstream tag (floating refs forbidden): {v}"
+          print(f"Verified {len(repos)} pinned upstream module entries in {manifest}")
+
+          for rel in sys.argv[2:]:
+              pins = scalars(rel, "platform_version")
+              assert len(pins) == 1, f"{rel} must declare exactly one quoted platform_version"
+              assert re.fullmatch(r'unreleased|udp-gcp-v[0-9]+\.[0-9]+\.[0-9]+', pins[0]), f"Invalid platform_version in {rel}: {pins[0]}"
+              print(f"Verified {rel}: platform_version={pins[0]}")
           PY
 
-      - name: Verify Terragrunt root inputs & generation across dev, uat, prod
+      - name: Verify Terragrunt root generation & source resolution (dev, uat, prod)
         env:
           UDP_GCP_STATE_BUCKET: "ci-placeholder-bucket"
           UDP_GCP_STATE_KMS_KEY_ID: "projects/ci/locations/us-central1/keyRings/ci/cryptoKeys/state"
@@ -84,23 +137,41 @@ jobs:
         run: |
           set -euo pipefail
           for env in dev uat prod; do
-            rendered="$(terragrunt render --json --working-dir "${{ env.PROJECT_DIR }}/infra/envs/${env}")"
-            printf '%s' "$rendered" | grep -q "envs/${env}"
-            printf '%s' "$rendered" | grep -q "gcp_kms"
-            printf '%s' "$rendered" | grep -q "cff_version"
-            printf '%s' "$rendered" | grep -q "project_factory_version"
-            printf '%s' "$rendered" | grep -q "../../platform//."
+            rendered="$(terragrunt render --json --working-dir "${PROJECT_DIR}/infra/envs/${env}")"
+            printf '%s' "$rendered" | python3 -c '
+          import json, re, sys
+          env, platform_repo = sys.argv[1], sys.argv[2]
+          cfg = json.load(sys.stdin)
+          blob = json.dumps(cfg)
+          source = cfg["terraform"]["source"]
+          assert f"envs/{env}" in blob, f"{env}: backend prefix envs/{env} missing"
+          assert "gcp_kms" in blob and "aes_gcm" in blob, f"{env}: KMS encryption not generated"
+          assert "google-beta" in blob, f"{env}: google-beta provider not generated"
+          if env == "dev":
+              assert source == "../../platform//.", f"dev must track ../../platform//. (got {source})"
+          else:
+              m = re.fullmatch(r"git::(.+?\.git)//(.+)\?ref=(.+)", source)
+              assert m, f"{env}: source must be <platform_git_source>?ref=<platform_version> (got {source})"
+              assert m.group(1) == platform_repo, f"{env}: unexpected repo {m.group(1)}"
+              assert m.group(2).endswith("infra/platform"), f"{env}: unexpected subpath {m.group(2)}"
+              assert re.fullmatch(r"unreleased|udp-gcp-v[0-9]+\.[0-9]+\.[0-9]+", m.group(3)), f"{env}: bad ref {m.group(3)}"
+          print(f"{env}: source={source}")
+          ' "$env" "$UDP_GCP_PLATFORM_REPO"
           done
 
-      - name: Validate Bootstrap (OpenTofu) & Platform (Terragrunt offline)
+      - name: Validate Bootstrap, Platform (OpenTofu) & Envs (Terragrunt offline)
         env:
           UDP_GCP_OFFLINE_TEST: "true"
         run: |
           set -euo pipefail
-          tofu -chdir="${{ env.PROJECT_DIR }}/infra/bootstrap" init -backend=false -input=false
-          tofu -chdir="${{ env.PROJECT_DIR }}/infra/bootstrap" validate
-          terragrunt init --non-interactive --working-dir "${{ env.PROJECT_DIR }}/infra/envs/dev" -backend=false -input=false
-          terragrunt validate --non-interactive --working-dir "${{ env.PROJECT_DIR }}/infra/envs/dev"
+          tofu -chdir="${PROJECT_DIR}/infra/bootstrap" init -backend=false -input=false
+          tofu -chdir="${PROJECT_DIR}/infra/bootstrap" validate
+          tofu -chdir="${PROJECT_DIR}/infra/platform" init -backend=false -input=false
+          tofu -chdir="${PROJECT_DIR}/infra/platform" validate
+          for env in dev uat prod; do
+            terragrunt init --non-interactive --working-dir "${PROJECT_DIR}/infra/envs/${env}" -backend=false -input=false
+            terragrunt validate --non-interactive --working-dir "${PROJECT_DIR}/infra/envs/${env}"
+          done
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -124,27 +195,33 @@ jobs:
           skip-dirs: "**/.terraform,**/.terragrunt-cache"
           trivyignores: "${{ env.PROJECT_DIR }}/.trivyignore"
 
-      - name: Run bootstrap script syntax & mocked unit tests
+      - name: Run script syntax & mocked unit tests (bootstrap preflight + change detection)
         run: |
-          bash -n "${{ env.PROJECT_DIR }}/scripts/bootstrap_init.sh"
-          bash "${{ env.PROJECT_DIR }}/scripts/test_bootstrap_init.sh"
+          set -euo pipefail
+          for script in bootstrap_init.sh detect_affected_envs.sh; do
+            bash -n "${PROJECT_DIR}/scripts/${script}"
+          done
+          bash "${PROJECT_DIR}/scripts/test_bootstrap_init.sh"
+          bash "${PROJECT_DIR}/scripts/test_detect_affected_envs.sh"
 
       - name: Run OpenTofu & Terragrunt mocked unit tests
         env:
           UDP_GCP_OFFLINE_TEST: "true"
         run: |
           set -euo pipefail
-          tofu -chdir="${{ env.PROJECT_DIR }}/infra/bootstrap" test -verbose
-          terragrunt test --non-interactive --working-dir "${{ env.PROJECT_DIR }}/infra/envs/dev" -verbose
+          tofu -chdir="${PROJECT_DIR}/infra/bootstrap" test -verbose
+          tofu -chdir="${PROJECT_DIR}/infra/platform" test -verbose
+          terragrunt test --non-interactive --working-dir "${PROJECT_DIR}/infra/envs/dev" -verbose
 
   plan:
     name: Plan (${{ matrix.env }}) — Read-Only WIF
     runs-on: ubuntu-latest
-    needs: static-checks
+    needs: [detect-changes, static-checks]
+    if: needs.detect-changes.outputs.has_envs == 'true'
     strategy:
       fail-fast: false
       matrix:
-        env: [dev, uat, prod]
+        env: ${{ fromJSON(needs.detect-changes.outputs.envs) }}
     permissions:
       contents: read
       id-token: write
@@ -173,6 +250,23 @@ jobs:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
           tf_path: tofu
           tg_command: "--version"
+
+      - name: Resolve platform release pin (${{ matrix.env }})
+        id: release
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.env }}" == "dev" ]]; then
+            echo "version=main HEAD (../../platform//.)" >> "$GITHUB_OUTPUT"
+          else
+            version="$(sed -nE 's/^platform_version:[[:space:]]*"?([^"#[:space:]]*)"?.*$/\1/p' "${PROJECT_DIR}/infra/envs/${{ matrix.env }}/release.yaml" | head -n 1)"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure ephemeral Git credentials for private platform tag fetch
+        if: matrix.env != 'dev'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git config --global "url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.insteadOf" "https://github.com/${GITHUB_REPOSITORY}"
 
       - name: Authenticate to GCP via WIF (Read-Only Plan SA)
         uses: google-github-actions/auth@v2
@@ -203,25 +297,38 @@ jobs:
           {
             terragrunt init --non-interactive -lock=false -input=false -no-color
             terragrunt plan --non-interactive -lock=false -input=false -no-color
-          } 2>&1 | tee plan_output.txt
+          } 2>&1 | tee "${RUNNER_TEMP}/plan_output.txt"
 
-      - name: Post Plan Summary to PR
+      - name: Remove ephemeral Git credentials
+        if: always() && matrix.env != 'dev'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git config --global --remove-section "url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" || true
+
+      - name: Publish plan summary (PR comment + job summary)
+        if: always() && steps.plan.outcome != 'skipped'
         uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ matrix.env }}
+          PLATFORM_VERSION: ${{ steps.release.outputs.version }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
         with:
           script: |
             const fs = require('fs');
-            const envName = '${{ matrix.env }}';
-            const planPath = `${process.env.PROJECT_DIR}/infra/envs/${envName}/plan_output.txt`;
+            const envName = process.env.ENV_NAME;
+            const planPath = `${process.env.RUNNER_TEMP}/plan_output.txt`;
             let plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : 'Plan output unavailable.';
             const maxLen = 60000;
             if (plan.length > maxLen) {
-              plan = plan.slice(0, maxLen) + '\n... (truncated)';
+              plan = plan.slice(0, maxLen) + '\n... (truncated; see workflow logs for full plan)';
             }
             const marker = `<!-- udp-gcp-${envName}-plan -->`;
-            const status = '${{ steps.plan.outcome }}' === 'success' ? 'Succeeded' : 'Failed';
+            const status = process.env.PLAN_OUTCOME === 'success' ? 'Succeeded' : 'Failed';
             const body = [
               marker,
               `### Terragrunt + OpenTofu Plan (\`infra/envs/${envName}\`) — **${status}**`,
+              '',
+              `Platform release: \`${process.env.PLATFORM_VERSION}\``,
               '',
               '<details><summary>Show Plan Output</summary>',
               '',
@@ -233,10 +340,18 @@ jobs:
               `*Actor: @${context.actor} | Workflow: \`${context.workflow}\` | Commit: \`${context.sha.slice(0, 7)}\`*`
             ].join('\n');
 
-            const { data: comments } = await github.rest.issues.listComments({
+            await core.summary.addRaw(body).write();
+
+            if (!context.issue || !context.issue.number || context.eventName !== 'pull_request') {
+              core.info('Not a pull_request event; plan published to job summary only.');
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
+              per_page: 100,
             });
             const existing = comments.find(c => c.body && c.body.includes(marker));
             if (existing) {

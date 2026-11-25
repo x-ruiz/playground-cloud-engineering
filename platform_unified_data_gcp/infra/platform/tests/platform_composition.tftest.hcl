@@ -35,20 +35,18 @@ mock_provider "google-beta" {
 }
 
 variables {
-  cff_version             = "v60.0.0"
-  project_factory_version = "v18.4.0"
-  environment             = "dev"
-  platform_folder_id      = "folders/123456789012"
-  billing_account_id      = "01ABCD-23EFGH-45IJKL"
-  project_id              = "udp-dev-test"
-  project_name            = "UDP Dev"
-  region                  = "us-central1"
-  subnet_cidr             = "10.10.0.0/20"
-  monthly_budget_usd      = 50
-  budget_alert_email      = "alerts@example.com"
+  environment        = "dev"
+  platform_folder_id = "folders/123456789012"
+  billing_account_id = "01ABCD-23EFGH-45IJKL"
+  project_id         = "udp-dev-test"
+  project_name       = "UDP Dev"
+  region             = "us-central1"
+  subnet_cidr        = "10.10.0.0/20"
+  monthly_budget_usd = 50
+  budget_alert_email = "alerts@example.com"
 }
 
-# TC-004 (dev): Default $0/mo baseline with tag-pinned upstream CFF & PF budget modules
+# TC-005 (dev): Default $0/mo baseline with tag-pinned upstream CFF & PF budget modules
 run "dev_platform_composition" {
   command = plan
 
@@ -66,9 +64,16 @@ run "dev_platform_composition" {
     condition     = google_monitoring_notification_channel.budget_email.labels["email_address"] == "alerts@example.com"
     error_message = "Monitoring email channel must target var.budget_alert_email."
   }
+
+  assert {
+    condition = alltrue([
+      for m in values(local.module_versions) : can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", m.version))
+    ]) && local.cff_version == local.module_versions["cloud-foundation-fabric"].version && local.project_factory_version == local.module_versions["terraform-google-project-factory"].version
+    error_message = "Upstream module tags must be early-evaluated from module-versions.yaml as immutable vX.Y.Z releases."
+  }
 }
 
-# TC-004 (uat): Parameterized UAT composition
+# TC-005 (uat): Parameterized UAT composition
 run "uat_platform_composition" {
   command = plan
 
@@ -86,7 +91,7 @@ run "uat_platform_composition" {
   }
 }
 
-# TC-004 (prod + opt-in NAT): Parameterized Prod composition with flow logs and Cloud NAT
+# TC-005 (prod + opt-in NAT): Parameterized Prod composition with flow logs and Cloud NAT
 run "prod_platform_with_opt_in_nat" {
   command = plan
 
@@ -106,7 +111,7 @@ run "prod_platform_with_opt_in_nat" {
   }
 }
 
-# TC-004 (negative): Reject unsupported environment enum, invalid CIDR, and zero budget
+# TC-005 (negative): Reject unsupported environment enum, invalid CIDR, and zero budget
 run "reject_invalid_environment" {
   command = plan
 
