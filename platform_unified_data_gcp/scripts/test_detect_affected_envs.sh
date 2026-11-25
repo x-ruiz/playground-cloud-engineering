@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Offline unit tests for scripts/detect_affected_envs.sh (Spec 04 REQ-03 routing matrix).
+# Offline unit tests for scripts/detect_affected_envs.sh (Spec 03 REQ-03 routing matrix).
 # Builds throwaway project trees in a temp dir; zero network, Git, or GCP calls.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +50,7 @@ expect "platform change -> dev only" '["dev"]' "${PD}/infra/platform/main.tf\n"
 expect "module-versions bump -> dev only" '["dev"]' "${PD}/infra/platform/module-versions.yaml\n"
 expect "root.hcl on day 0 -> dev only" '["dev"]' "${PD}/infra/envs/root.hcl\n"
 expect "unreleased uat edit -> skipped" '[]' "${PD}/infra/envs/uat/terragrunt.hcl\n"
-expect "bootstrap/scripts/specs only -> none" '[]' "${PD}/infra/bootstrap/main.tf\n${PD}/scripts/bootstrap_init.sh\n${PD}/specs/04_github_actions_cicd.md\n${PD}/README.md\n"
+expect "scripts/specs/docs only -> none" '[]' "${PD}/scripts/detect_affected_envs.sh\n${PD}/specs/03_github_actions_cicd.md\n${PD}/README.md\n"
 expect "apply workflow change -> dev" '["dev"]' ".github/workflows/udp-gcp-apply.yml\n"
 expect "pr-check workflow change -> dev" '["dev"]' ".github/workflows/udp-gcp-pr-check.yml\n"
 expect "promote workflow change -> none" '[]' ".github/workflows/udp-gcp-promote.yml\n"

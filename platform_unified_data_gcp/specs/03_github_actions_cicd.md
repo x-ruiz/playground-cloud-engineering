@@ -5,7 +5,7 @@
 - **Archetype:** CI/CD & Trunk-Based GitOps Promotion Contract
 - **Tier:** Full Spec
 - **Owner:** Xavier Ruiz
-- **Depends On:** `specs/01_gcp_bootstrap_and_wif.md`, `specs/03_platform_and_terragrunt_envs.md`
+- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap), `specs/02_platform_and_terragrunt_envs.md`
 
 ---
 
@@ -90,7 +90,7 @@ flowchart LR
     Detect -->|"infra/envs/uat/**\n(and release != unreleased)"| TargetUat["Target: uat"]
     Detect -->|"infra/envs/prod/**\n(and release != unreleased)"| TargetProd["Target: prod"]
     Detect -->|"infra/envs/root.hcl"| TargetAll["Target: dev + all released envs"]
-    Detect -->|"infra/bootstrap/** or\nscripts/** only"| TargetNone["Target: none (Static Checks Only)"]
+    Detect -->|"scripts/**, specs/**,\nor docs only"| TargetNone["Target: none (Static Checks Only)"]
 
     subgraph PR["udp-gcp-pr-check.yml (sa-tofu-plan, Read-Only WIF)"]
         Static["static-checks\nfmt, validate, tflint, trivy, unit tests"]
@@ -169,13 +169,13 @@ sequenceDiagram
 ## 3. Scope & Explicit Non-Goals
 
 ### In Scope
-- **Spec 03 Alignment (Companion Platform/Terragrunt Updates Required for Tagging):**
+- **Spec 02 Alignment (Companion Platform/Terragrunt Updates Required for Tagging):**
   - Move `infra/module-versions.yaml` → `infra/platform/module-versions.yaml`, read directly inside `infra/platform/` via OpenTofu 1.8+ Early Variable Evaluation (`yamldecode(file("${path.module}/module-versions.yaml"))`) so upstream CFF / Project Factory tags travel atomically inside each `udp-gcp-vX.Y.Z` Git tag.
   - Add machine-promoted `infra/envs/uat/release.yaml` and `infra/envs/prod/release.yaml` (`platform_version: "unreleased"` on Day 0, then `"udp-gcp-vX.Y.Z"` once promoted).
   - Keep `infra/envs/dev/terragrunt.hcl` on `source = "../../platform//."`; update `infra/envs/uat/terragrunt.hcl` and `infra/envs/prod/terragrunt.hcl` to resolve `terraform.source` to the tagged repo URL `${include.root.locals.platform_git_source}?ref=${local.platform_version}` (falling back to `../../platform//.` only under `UDP_GCP_OFFLINE_TEST=true`).
 - **`<repo-root>/.github/workflows/udp-gcp-pr-check.yml`:**
   - `detect-changes` job calculating exact affected environments (`dev`, `uat`, `prod`) and skipping any environment whose `release.yaml` is `"unreleased"`.
-  - `static-checks` job running formatting, layout/tag-pinning/schema invariants (including `release.yaml` format validation), `terragrunt render`, `validate`, `tflint`, `trivy config`, `test_bootstrap_init.sh`, and mocked `tofu test` / `terragrunt test`.
+  - `static-checks` job running formatting, layout/tag-pinning/schema invariants (including `release.yaml` format validation), `terragrunt render`, `validate`, `tflint`, `trivy config`, `test_detect_affected_envs.sh`, and mocked `tofu test` / `terragrunt test`.
   - Dynamic-matrix `plan` job authenticating via WIF (`sa-tofu-plan`), configuring Git HTTPS auth with `GITHUB_TOKEN` for private-repo tag fetching, checking remote state existence (`UDP_GCP_EPHEMERAL_PLAN_STATE` pre-first-apply), running `terragrunt plan -lock=false`, and upserting PR comments only for affected environments.
 - **`<repo-root>/.github/workflows/udp-gcp-apply.yml`:**
   - `detect-changes` job mapping `push` to `main` diffs (or manual `workflow_dispatch` `target_env`) to exact target environment flags (`apply_dev`, `apply_uat`, `apply_prod`).
@@ -187,7 +187,7 @@ sequenceDiagram
 ### Non-Goals (Do Not Implement Yet — Future CI/CD Iterations)
 - **Long-lived environment Git branches (`uat`, `prod`)** — explicitly rejected to prevent merge-conflict drift and cross-project monorepo bleed.
 - **Copying `.tf` files across environment directories** — explicitly rejected to preserve DRY Terragrunt wrappers.
-- **Scheduled drift detection cron workflow** (future Spec 05+ enhancement).
+- **Scheduled drift detection cron workflow** (future Spec 04+ enhancement).
 - **Automated FinOps / Infracost PR comments** (future enhancement).
 - **Self-hosted runners, Atlantis, or HCP Terraform** (GitHub-hosted `ubuntu-latest` + WIF only).
 
@@ -203,8 +203,8 @@ sequenceDiagram
   - `infra/envs/uat/**` → `uat` only (if `uat/release.yaml` != `"unreleased"`)
   - `infra/envs/prod/**` → `prod` only (if `prod/release.yaml` != `"unreleased"`)
   - `infra/envs/root.hcl` → `dev` + any of `uat`/`prod` whose `release.yaml` != `"unreleased"`
-  - `infra/bootstrap/**`, `scripts/**`, `specs/**`, docs only → empty env list (static checks only; zero plans/applies)
-- `REQ-04`: **PR Static Quality, Security & Release-Pin Gate (`static-checks`)** — `udp-gcp-pr-check.yml` shall fail fast before authenticating to GCP if any check fails: `tofu fmt`, `terragrunt hcl fmt`, zero `.tf` under `infra/envs/`, absence of `infra/modules/`, zero hardcoded `?ref=v...` literals in `infra/platform/*.tf`, `infra/platform/module-versions.yaml` semver validation, `infra/envs/{uat,prod}/release.yaml` schema validation (`^(unreleased|udp-gcp-v[0-9]+\.[0-9]+\.[0-9]+)$`), `terragrunt render`, `validate`, `tflint --recursive`, `trivy config` (`HIGH,CRITICAL`), `scripts/test_bootstrap_init.sh`, and mocked `tofu test` / `terragrunt test`.
+  - `scripts/**`, `specs/**`, docs only → empty env list (static checks only; zero plans/applies)
+- `REQ-04`: **PR Static Quality, Security & Release-Pin Gate (`static-checks`)** — `udp-gcp-pr-check.yml` shall fail fast before authenticating to GCP if any check fails: `tofu fmt`, `terragrunt hcl fmt`, zero `.tf` under `infra/envs/`, absence of `infra/modules/`, zero hardcoded `?ref=v...` literals in `infra/platform/*.tf`, `infra/platform/module-versions.yaml` semver validation, `infra/envs/{uat,prod}/release.yaml` schema validation (`^(unreleased|udp-gcp-v[0-9]+\.[0-9]+\.[0-9]+)$`), `terragrunt render`, `validate`, `tflint --recursive`, `trivy config` (`HIGH,CRITICAL`), `scripts/test_detect_affected_envs.sh`, and mocked `tofu test` / `terragrunt test`.
 - `REQ-05`: **PR Read-Only Scoped Plan (`plan`)** — Gated on `static-checks` and skipped cleanly when `detect-changes` produces an empty matrix, `udp-gcp-pr-check.yml` shall run a dynamic matrix over only affected released environments (`fail-fast: false`), authenticate via WIF as `sa-tofu-plan`, detect whether `envs/<env>/default.tfstate` exists in GCS (falling back to `UDP_GCP_EPHEMERAL_PLAN_STATE=true` prior to first apply so `sa-tofu-plan` never needs state write permission), run `terragrunt plan -lock=false -no-color`, and upsert a dedicated PR comment per planned environment (truncated safely at 60,000 chars).
 - `REQ-06`: **Main-Branch Directory-Scoped Apply (`udp-gcp-apply.yml`)** — On push to `main` (or `workflow_dispatch` targeting a single released `target_env`), `udp-gcp-apply.yml` shall run ONLY the affected environment apply job(s) under `sa-tofu-apply` (server-side WIF restricted to `refs/heads/main`), with isolated concurrency groups `udp-gcp-dev-apply`, `udp-gcp-uat-apply`, `udp-gcp-prod-apply` (`cancel-in-progress: false`), executing `terragrunt init` → `terragrunt plan -out=tfplan` → `terragrunt apply -auto-approve tfplan` with GCS `.tflock` locking. When `root.hcl` triggers multiple environments, execution shall order `dev` → `uat` → `prod`.
 - `REQ-07`: **Immutable Tag Promotion Workflow (`udp-gcp-promote.yml`)** — Triggered via `workflow_dispatch` on `main` only:
@@ -249,9 +249,11 @@ platform_version: "unreleased"
 | `infra/envs/prod/**` (incl. `prod/release.yaml`) | Skip | Skip | Run | Prod promotion PR, rollback PR, or Prod-only config edit. |
 | `infra/envs/root.hcl` | Run | Run | Run | Shared root backend/provider/encryption changes apply in `dev` → `uat` → `prod` order. |
 | `.github/workflows/udp-gcp-{pr-check,apply}.yml` | Run | Skip | Skip | Exercises CI/CD pipeline changes safely against `dev` only (`udp-gcp-promote.yml` skips GCP plans). |
-| `infra/bootstrap/**`, `scripts/**`, `specs/**`, `README.md`, `udp-gcp-promote.yml` | Skip | Skip | Skip | `static-checks` still runs on PR; zero env plans or applies triggered. |
+| `scripts/**`, `specs/**`, `README.md`, `udp-gcp-promote.yml` | Skip | Skip | Skip | `static-checks` still runs on PR; zero env plans or applies triggered. |
 
 ### 5.4 Consumed GitHub Actions Variables & Optional Secrets
+
+The 7 org-owned variables (`WIF_PROVIDER`, `PLAN_SA`, `APPLY_SA`, `STATE_BUCKET`, `STATE_KMS_KEY_ID`, `PLATFORM_FOLDER_ID`, `BILLING_ACCOUNT_ID`) are synced by [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap); project ID prefixes and `UDP_GCP_BUDGET_ALERT_EMAIL` are owned by this platform repository.
 
 | Kind | Name | Required | Consumed By | Purpose |
 | :--- | :--- | :---: | :--- | :--- |
@@ -306,7 +308,7 @@ To keep promotions simple, linear, and safe without cherry-pick branches or mult
 
 | Case ID | Scenario | Input / Precondition | Expected Outcome |
 | :--- | :--- | :--- | :--- |
-| `TC-001` | PR Static, Schema & Release-Pin Gate | Open PR touching `platform_unified_data_gcp/**` | `static-checks` validates formatting, zero `.tf` in `envs/`, zero `infra/modules/`, `infra/platform/module-versions.yaml` semver schema, `release.yaml` schema, `terragrunt render`, `validate`, `tflint`, `trivy`, `test_bootstrap_init.sh`, and mocked tests. |
+| `TC-001` | PR Static, Schema & Release-Pin Gate | Open PR touching `platform_unified_data_gcp/**` | `static-checks` validates formatting, zero `.tf` in `envs/`, zero `infra/modules/`, `infra/platform/module-versions.yaml` semver schema, `release.yaml` schema, `terragrunt render`, `validate`, `tflint`, `trivy`, `test_detect_affected_envs.sh`, and mocked tests. |
 | `TC-002` | Feature PR Scoped to `dev` Only | PR modifies `infra/platform/**` only | `detect-changes` outputs `["dev"]`; PR Check plans and comments **only for `dev`**; `uat` and `prod` are untouched. |
 | `TC-003` | Main Merge Deploys `dev` Only | Merge feature PR (`infra/platform/**`) to `main` | `udp-gcp-apply.yml` runs `apply-dev` only under `sa-tofu-apply`; `apply-uat` and `apply-prod` are skipped. |
 | `TC-004` | Promote `dev` → `uat` (Tag + Promotion PR with TF Diff) | Run `udp-gcp-promote.yml` with `promotion=dev-to-uat`, `bump=minor` on `main` | Creates annotated tag `udp-gcp-v0.1.0` on `main` HEAD and opens Promotion PR updating `infra/envs/uat/release.yaml`, with PR body containing commit changelog, changed Terraform file stats, and collapsible HCL diff. |

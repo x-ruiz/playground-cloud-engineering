@@ -1,10 +1,10 @@
 # Unified Data Platform — GCP Foundation (`platform_unified_data_gcp`)
 
-OpenTofu + Terragrunt GCP foundation and GitOps platform governed by lifecycle-scoped specs:
-- [Spec 01: GCP Org Bootstrap, KMS State & Keyless WIF](./specs/01_gcp_bootstrap_and_wif.md)
-- [Spec 02: Reusable GCP Core Modules](./specs/02_gcp_core_modules.md) *(Superseded by Spec 03)*
-- [Spec 03: Tag-Pinned Platform Module & DRY Terragrunt Environments (`dev`/`uat`/`prod`)](./specs/03_platform_and_terragrunt_envs.md)
-- [Spec 04: GitHub Actions GitOps CI/CD & Tag-Based Environment Promotion](./specs/04_github_actions_cicd.md)
+OpenTofu + Terragrunt GCP foundation and GitOps platform governed by lifecycle-scoped specs *(Org bootstrap graduated to [x-ruiz/platform_gcp_org_bootstrap](https://github.com/x-ruiz/platform_gcp_org_bootstrap))*:
+- [Spec 01: Reusable GCP Core Modules](./specs/01_gcp_core_modules.md) *(Superseded by Spec 02)*
+- [Spec 02: Tag-Pinned Platform Module & DRY Terragrunt Environments (`dev`/`uat`/`prod`)](./specs/02_platform_and_terragrunt_envs.md)
+- [Spec 03: GitHub Actions GitOps CI/CD & Tag-Based Environment Promotion](./specs/03_github_actions_cicd.md)
+- [Spec 04: GCP Data Lakehouse Reference Architecture](./specs/04_data_lakehouse_architecture.md) *(Draft)*
 
 ## Architecture Overview
 
