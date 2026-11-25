@@ -1,0 +1,13 @@
+# Single source of truth for upstream public GitHub OpenTofu module release tags.
+# Read by platform_unified_data_gcp/infra/envs/root.hcl via yamldecode(file(...))
+# and passed as inputs (`cff_version`, `project_factory_version`) to infra/platform/main.tf
+# via OpenTofu 1.8+ Early Variable Evaluation in `module.source`.
+
+modules:
+  cloud-foundation-fabric:
+    repository: "https://github.com/GoogleCloudPlatform/cloud-foundation-fabric.git"
+    version: "v60.0.0"
+
+  terraform-google-project-factory:
+    repository: "https://github.com/terraform-google-modules/terraform-google-project-factory.git"
+    version: "v18.4.0"

@@ -43,6 +43,7 @@ variables {
   seed_project_id    = "udp-seed-test-001"
   dev_project_id     = "udp-dev-test-001"
   budget_alert_email = "alerts@example.com"
+  state_kms_key_id   = "projects/udp-seed-test-001/locations/us-central1/keyRings/unified-data-platform-tofu-state/cryptoKeys/tofu-state-key"
 }
 
 # TC-009: Bootstrap hardening, WIF least privilege, and Folder-scoped IAM invariants
@@ -80,8 +81,8 @@ run "bootstrap_hardening_and_wif_invariants" {
   }
 
   assert {
-    condition     = google_storage_bucket_iam_member.plan_state_viewer.role == "roles/storage.objectViewer" && google_kms_crypto_key_iam_member.plan_kms_decrypter.role == "roles/cloudkms.cryptoKeyDecrypter"
-    error_message = "sa-tofu-plan must have read-only storage and KMS decrypt-only permissions."
+    condition     = google_storage_bucket_iam_member.plan_state_viewer.role == "roles/storage.objectViewer" && google_storage_bucket_iam_member.plan_state_lock.condition[0].expression == "resource.name.endsWith(\".tflock\")" && google_kms_crypto_key_iam_member.plan_kms_decrypter.role == "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+    error_message = "sa-tofu-plan must have read-only GCS objectViewer, .tflock-only conditional lock permission, and KMS encrypter/decrypter."
   }
 
   assert {

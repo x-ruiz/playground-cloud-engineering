@@ -1,4 +1,4 @@
-name: UDP GCP — PR Check & Plan
+name: UDP GCP — PR Check & Multi-Env Plan
 
 on:
   pull_request:
@@ -9,10 +9,11 @@ on:
 permissions: {}
 
 env:
-  OPENTOFU_VERSION: "1.9.0"
-  TFLINT_VERSION: "0.55.1"
-  TRIVY_VERSION: "0.58.1"
+  OPENTOFU_VERSION: "1.13.10"
+  TERRAGRUNT_VERSION: "1.2.2"
+  TFLINT_VERSION: "0.66.0"
   PROJECT_DIR: "platform_unified_data_gcp"
+  TG_TF_PATH: "tofu"
 
 jobs:
   static-checks:
@@ -29,22 +30,77 @@ jobs:
         with:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
+      - name: Setup Terragrunt
+        uses: gruntwork-io/terragrunt-action@v3.4.1
+        with:
+          tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tf_path: tofu
+          tg_command: "--version"
+
       - name: Check OpenTofu formatting
         run: tofu fmt -check -recursive -diff ${{ env.PROJECT_DIR }}/infra
 
-      - name: Validate OpenTofu roots and modules
+      - name: Check Terragrunt HCL formatting, DRY wrappers & module-versions.yaml schema
         run: |
-          for dir in \
-            "${{ env.PROJECT_DIR }}/infra/bootstrap" \
-            "${{ env.PROJECT_DIR }}/infra/modules/project_factory" \
-            "${{ env.PROJECT_DIR }}/infra/modules/vpc_network" \
-            "${{ env.PROJECT_DIR }}/infra/modules/budget_guardrail" \
-            "${{ env.PROJECT_DIR }}/infra/envs/dev"
-          do
-            echo "=== Validating ${dir} ==="
-            tofu -chdir="${dir}" init -backend=false -input=false
-            tofu -chdir="${dir}" validate
+          set -euo pipefail
+          terragrunt hcl fmt --check --working-dir "${{ env.PROJECT_DIR }}/infra/envs"
+
+          if [[ -d "${{ env.PROJECT_DIR }}/infra/modules" ]]; then
+            echo "ERROR: Local infra/modules/ directory is forbidden by Spec 03." >&2
+            exit 1
+          fi
+
+          if find "${{ env.PROJECT_DIR }}/infra/envs" -name '*.tf' | grep -q .; then
+            echo "ERROR: Found .tf files inside infra/envs/. Environment directories must contain only terragrunt.hcl wrappers." >&2
+            exit 1
+          fi
+
+          if grep -rnE '\?ref=[^$]' "${{ env.PROJECT_DIR }}"/infra/platform/*.tf; then
+            echo "ERROR: Hardcoded ?ref= tags found in infra/platform/*.tf; pass tags via variables from infra/module-versions.yaml." >&2
+            exit 1
+          fi
+
+          python3 - "${{ env.PROJECT_DIR }}/infra/module-versions.yaml" <<'PY'
+          import re, sys
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              lines = fh.readlines()
+          repos = [m.group(1) for line in lines if (m := re.match(r'^\s+repository:\s*"([^"]+)"\s*$', line))]
+          vers  = [m.group(1) for line in lines if (m := re.match(r'^\s+version:\s*"([^"]+)"\s*$', line))]
+          assert repos and len(repos) == len(vers), "Malformed module-versions.yaml"
+          for r in repos:
+              assert re.match(r'^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$', r), f"Bad repo: {r}"
+          for v in vers:
+              assert re.match(r'^v[0-9]+\.[0-9]+\.[0-9]+$', v), f"Non-semver tag (floating refs forbidden): {v}"
+          print(f"Verified {len(repos)} pinned module entries in {sys.argv[1]}")
+          PY
+
+      - name: Verify Terragrunt root inputs & generation across dev, uat, prod
+        env:
+          UDP_GCP_STATE_BUCKET: "ci-placeholder-bucket"
+          UDP_GCP_STATE_KMS_KEY_ID: "projects/ci/locations/us-central1/keyRings/ci/cryptoKeys/state"
+          UDP_GCP_PLATFORM_FOLDER_ID: "folders/123456789012"
+          UDP_GCP_BILLING_ACCOUNT_ID: "01ABCD-23EFGH-45IJKL"
+          UDP_GCP_BUDGET_ALERT_EMAIL: "alerts@example.com"
+        run: |
+          set -euo pipefail
+          for env in dev uat prod; do
+            rendered="$(terragrunt render --json --working-dir "${{ env.PROJECT_DIR }}/infra/envs/${env}")"
+            printf '%s' "$rendered" | grep -q "envs/${env}"
+            printf '%s' "$rendered" | grep -q "gcp_kms"
+            printf '%s' "$rendered" | grep -q "cff_version"
+            printf '%s' "$rendered" | grep -q "project_factory_version"
+            printf '%s' "$rendered" | grep -q "../../platform//."
           done
+
+      - name: Validate Bootstrap (OpenTofu) & Platform (Terragrunt offline)
+        env:
+          UDP_GCP_OFFLINE_TEST: "true"
+        run: |
+          set -euo pipefail
+          tofu -chdir="${{ env.PROJECT_DIR }}/infra/bootstrap" init -backend=false -input=false
+          tofu -chdir="${{ env.PROJECT_DIR }}/infra/bootstrap" validate
+          terragrunt init --non-interactive --working-dir "${{ env.PROJECT_DIR }}/infra/envs/dev" -backend=false -input=false
+          terragrunt validate --non-interactive --working-dir "${{ env.PROJECT_DIR }}/infra/envs/dev"
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -58,47 +114,50 @@ jobs:
           tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=infra
 
       - name: Run Trivy IaC security scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "config"
           scan-ref: "${{ env.PROJECT_DIR }}/infra"
           severity: "HIGH,CRITICAL"
           exit-code: "1"
           ignore-unfixed: false
+          skip-dirs: "**/.terraform,**/.terragrunt-cache"
           trivyignores: "${{ env.PROJECT_DIR }}/.trivyignore"
 
-      - name: Run bootstrap preflight script syntax & mocked unit tests
+      - name: Run bootstrap script syntax & mocked unit tests
         run: |
           bash -n "${{ env.PROJECT_DIR }}/scripts/bootstrap_init.sh"
           bash "${{ env.PROJECT_DIR }}/scripts/test_bootstrap_init.sh"
 
-      - name: Run OpenTofu mocked unit tests
+      - name: Run OpenTofu & Terragrunt mocked unit tests
+        env:
+          UDP_GCP_OFFLINE_TEST: "true"
         run: |
-          for dir in \
-            "${{ env.PROJECT_DIR }}/infra/bootstrap" \
-            "${{ env.PROJECT_DIR }}/infra/modules/project_factory" \
-            "${{ env.PROJECT_DIR }}/infra/modules/vpc_network" \
-            "${{ env.PROJECT_DIR }}/infra/modules/budget_guardrail" \
-            "${{ env.PROJECT_DIR }}/infra/envs/dev"
-          do
-            echo "=== Testing ${dir} ==="
-            tofu -chdir="${dir}" test -verbose
-          done
+          set -euo pipefail
+          tofu -chdir="${{ env.PROJECT_DIR }}/infra/bootstrap" test -verbose
+          terragrunt test --non-interactive --working-dir "${{ env.PROJECT_DIR }}/infra/envs/dev" -verbose
 
-  plan-dev:
-    name: Plan Dev (Read-Only WIF)
+  plan:
+    name: Plan (${{ matrix.env }}) — Read-Only WIF
     runs-on: ubuntu-latest
     needs: static-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, uat, prod]
     permissions:
       contents: read
       id-token: write
       pull-requests: write
     env:
-      TF_VAR_platform_folder_id: ${{ vars.UDP_GCP_PLATFORM_FOLDER_ID }}
-      TF_VAR_billing_account_id: ${{ vars.UDP_GCP_BILLING_ACCOUNT_ID }}
-      TF_VAR_project_id: ${{ vars.UDP_GCP_DEV_PROJECT_ID }}
-      TF_VAR_budget_alert_email: ${{ vars.UDP_GCP_BUDGET_ALERT_EMAIL }}
-      TF_VAR_state_kms_key_id: ${{ vars.UDP_GCP_STATE_KMS_KEY_ID }}
+      UDP_GCP_STATE_BUCKET: ${{ vars.UDP_GCP_STATE_BUCKET }}
+      UDP_GCP_STATE_KMS_KEY_ID: ${{ vars.UDP_GCP_STATE_KMS_KEY_ID }}
+      UDP_GCP_PLATFORM_FOLDER_ID: ${{ vars.UDP_GCP_PLATFORM_FOLDER_ID }}
+      UDP_GCP_BILLING_ACCOUNT_ID: ${{ vars.UDP_GCP_BILLING_ACCOUNT_ID }}
+      UDP_GCP_BUDGET_ALERT_EMAIL: ${{ vars.UDP_GCP_BUDGET_ALERT_EMAIL }}
+      UDP_GCP_DEV_PROJECT_ID: ${{ vars.UDP_GCP_DEV_PROJECT_ID || 'udp-dev' }}
+      UDP_GCP_UAT_PROJECT_ID: ${{ vars.UDP_GCP_UAT_PROJECT_ID || 'udp-uat' }}
+      UDP_GCP_PROD_PROJECT_ID: ${{ vars.UDP_GCP_PROD_PROJECT_ID || 'udp-prod' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -108,42 +167,61 @@ jobs:
         with:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
+      - name: Setup Terragrunt
+        uses: gruntwork-io/terragrunt-action@v3.4.1
+        with:
+          tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tf_path: tofu
+          tg_command: "--version"
+
       - name: Authenticate to GCP via WIF (Read-Only Plan SA)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
           service_account: ${{ vars.UDP_GCP_PLAN_SA }}
 
-      - name: Initialize OpenTofu (Dev)
-        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/dev
+      - name: Check whether remote state exists for ${{ matrix.env }}
+        id: state_check
         run: |
-          tofu init -input=false \
-            -backend-config="bucket=${{ vars.UDP_GCP_STATE_BUCKET }}"
+          set -euo pipefail
+          if gcloud storage objects describe "gs://${UDP_GCP_STATE_BUCKET}/envs/${{ matrix.env }}/default.tfstate" >/dev/null 2>&1; then
+            echo "ephemeral=false" >> "$GITHUB_OUTPUT"
+            echo "Found existing encrypted remote state for envs/${{ matrix.env }}."
+          else
+            echo "ephemeral=true" >> "$GITHUB_OUTPUT"
+            echo "No remote state exists yet for envs/${{ matrix.env }}; planning against empty ephemeral state (read-only SA cannot create .tfstate)."
+          fi
 
-      - name: Run Read-Only OpenTofu Plan (Dev)
+      - name: Run Read-Only Terragrunt Plan (${{ matrix.env }})
         id: plan
-        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/dev
+        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/${{ matrix.env }}
+        env:
+          UDP_GCP_EPHEMERAL_PLAN_STATE: ${{ steps.state_check.outputs.ephemeral }}
         continue-on-error: true
         run: |
           set -o pipefail
-          tofu plan -lock=false -input=false -no-color 2>&1 | tee plan_output.txt
+          {
+            terragrunt init --non-interactive -lock=false -input=false -no-color
+            terragrunt plan --non-interactive -lock=false -input=false -no-color
+          } 2>&1 | tee plan_output.txt
 
       - name: Post Plan Summary to PR
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const planPath = '${{ env.PROJECT_DIR }}/infra/envs/dev/plan_output.txt';
+            const envName = '${{ matrix.env }}';
+            const planPath = `${process.env.PROJECT_DIR}/infra/envs/${envName}/plan_output.txt`;
             let plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, 'utf8') : 'Plan output unavailable.';
             const maxLen = 60000;
             if (plan.length > maxLen) {
               plan = plan.slice(0, maxLen) + '\n... (truncated)';
             }
-            const marker = '<!-- udp-gcp-dev-plan -->';
+            const marker = `<!-- udp-gcp-${envName}-plan -->`;
             const status = '${{ steps.plan.outcome }}' === 'success' ? 'Succeeded' : 'Failed';
             const body = [
               marker,
-              `### OpenTofu Plan (\`platform_unified_data_gcp/infra/envs/dev\`) — **${status}**`,
+              `### Terragrunt + OpenTofu Plan (\`infra/envs/${envName}\`) — **${status}**`,
               '',
               '<details><summary>Show Plan Output</summary>',
               '',

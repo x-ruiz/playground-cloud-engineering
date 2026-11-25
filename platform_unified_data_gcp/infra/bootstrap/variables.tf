@@ -91,3 +91,8 @@ variable "cost_center" {
   }
 }
 
+variable "state_kms_key_id" {
+  description = "Cloud KMS CryptoKey ID used by OpenTofu gcp_kms state encryption."
+  type        = string
+}
+

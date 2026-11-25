@@ -1,28 +1,29 @@
 # Unified Data Platform — GCP Foundation (`platform_unified_data_gcp`)
 
-OpenTofu-managed GCP foundation and GitOps platform governed by three lifecycle-scoped specs:
+OpenTofu + Terragrunt GCP foundation and GitOps platform governed by lifecycle-scoped specs:
 - [Spec 01: GCP Org Bootstrap, KMS State & Keyless WIF](./specs/01_gcp_bootstrap_and_wif.md)
-- [Spec 02: Reusable GCP Core Modules](./specs/02_gcp_core_modules.md)
-- [Spec 03: `envs/dev` Composition & GitHub Actions GitOps Workflows](./specs/03_dev_env_and_gitops.md)
+- [Spec 02: Reusable GCP Core Modules](./specs/02_gcp_core_modules.md) *(Superseded by Spec 03)*
+- [Spec 03: Tag-Pinned Platform Module & DRY Terragrunt Environments (`dev`/`uat`/`prod`)](./specs/03_platform_and_terragrunt_envs.md)
+- [Spec 04: GitHub Actions GitOps CI/CD Pipelines](./specs/04_github_actions_cicd.md)
 
 ## Architecture Overview
 
-- **IaC Engine:** OpenTofu (`>= 1.8`, plain modular HCL, `hashicorp/google ~> 6.0`).
-- **Org & Project Topology:** One-time `infra/bootstrap/` creates a dedicated **Platform Folder** under your GCP Organization, a **Seed Project** (GCS versioned state bucket + Cloud KMS state encryption key + GitHub Actions WIF Pool/Provider), and **dual CI Service Accounts** scoped strictly to the Platform Folder (zero Org-wide roles).
+- **IaC Engine:** OpenTofu (`>= 1.12.2`, `hashicorp/google ~> 8.10`, `hashicorp/google-beta ~> 8.10`, `hashicorp/random ~> 3.6`) + **Terragrunt** (`TG_TF_PATH=tofu`) for DRY `dev` / `uat` / `prod` environment wrappers around a single `infra/platform/` root module.
+- **Zero Local Module Duplication:** `infra/platform/` sources official public GitHub GCP modules directly by immutable release tag (`GoogleCloudPlatform/cloud-foundation-fabric` `v60.0.0` for `project`, `net-vpc`, `net-vpc-firewall`, opt-in `net-cloudnat`; `terraform-google-modules/terraform-google-project-factory` `v18.4.0` for `budget`).
+- **Org & Project Topology:** One-time `infra/bootstrap/` creates a dedicated **Platform Folder** under your GCP Organization, a **Seed Project** (GCS versioned state bucket + Cloud KMS state encryption key + GitHub Actions WIF Pool/Provider), **dual CI Service Accounts** scoped strictly to the Platform Folder (zero Org-wide roles), and declarative GitHub Actions repository variables via `integrations/github`.
 - **Keyless GitOps (GitHub Actions + WIF):**
-  - `sa-tofu-plan`: Read-only on Folder/Projects/GCS/KMS; runs `tofu plan -lock=false` on PRs.
-  - `sa-tofu-apply`: Restricted server-side via WIF attribute condition to `refs/heads/main`; runs serialized `tofu apply` with GCS locking.
-- **Environment Modules (`infra/envs/dev`):**
-  - `modules/project_factory`: Creates the `dev` GCP project under the Platform Folder, links Billing, enables declared APIs (`disable_on_destroy = false`), enforces mandatory labels, and defaults `deletion_policy = "PREVENT"`.
-  - `modules/vpc_network`: Custom-mode VPC (`auto_create_network = false`), primary regional subnet with Private Google Access, IAP SSH + internal + deny-all-ingress firewall rules, and opt-in Cloud Router/NAT (`enable_cloud_nat = false` for a `$0/mo` idle baseline).
-  - `modules/budget_guardrail`: Project-scoped Billing Budget (50% / 80% / 100%) + Cloud Monitoring email notification channel.
+  - `sa-tofu-plan`: Read-only on Folder/Projects/GCS/KMS; runs `terragrunt plan -lock=false` across `dev`/`uat`/`prod` on PRs.
+  - `sa-tofu-apply`: Restricted server-side via WIF attribute condition to `refs/heads/main`; auto-applies `dev` on merge and gates `uat`/`prod` behind GitHub Environment approvals.
+- **DRY Terragrunt Wrappers (`infra/envs/{root.hcl, dev, uat, prod}`):**
+  - `infra/envs/root.hcl` dynamically generates `backend.tf` (`envs/<env>` prefix), `encryption.tf` (Cloud KMS), and `provider.tf` (`google` + `google-beta`) with zero `.tf` files inside `infra/envs/`.
 
 ## Local Prerequisites
 
 ```bash
-brew install opentofu trivy terraform-linters/tap/tflint
-# Plus gcloud CLI authenticated as an Org/Billing Admin for the one-time bootstrap step:
-gcloud auth application-default login
+brew install opentofu terragrunt trivy terraform-linters/tap/tflint
+# Plus gcloud CLI and gh CLI for one-time bootstrap:
+gcloud auth login && gcloud auth application-default login
+gh auth login
 ```
 
 ## Quality & Offline Verification
@@ -30,26 +31,31 @@ gcloud auth application-default login
 All static checks, security scans, and mocked unit tests run locally with zero GCP credentials or cost:
 
 ```bash
-# Formatting
+# Formatting (OpenTofu + Terragrunt)
 tofu fmt -check -recursive platform_unified_data_gcp/infra
+terragrunt hcl fmt --check --working-dir platform_unified_data_gcp/infra/envs
 
-# Validate all roots and modules
-for d in bootstrap modules/project_factory modules/vpc_network modules/budget_guardrail envs/dev; do
-  tofu -chdir="platform_unified_data_gcp/infra/${d}" init -backend=false
-  tofu -chdir="platform_unified_data_gcp/infra/${d}" validate
-done
+# Validate Bootstrap (OpenTofu) & Platform (Terragrunt native generation, offline mode)
+tofu -chdir="platform_unified_data_gcp/infra/bootstrap" init -backend=false
+tofu -chdir="platform_unified_data_gcp/infra/bootstrap" validate
+UDP_GCP_OFFLINE_TEST=true terragrunt init --non-interactive --working-dir platform_unified_data_gcp/infra/envs/dev -backend=false
+UDP_GCP_OFFLINE_TEST=true terragrunt validate --non-interactive --working-dir platform_unified_data_gcp/infra/envs/dev
 
 # TFLint (Google ruleset)
 (cd platform_unified_data_gcp && tflint --init --config="$(pwd)/.tflint.hcl" && tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=infra)
 
-# Trivy IaC security scan
-trivy config --severity HIGH,CRITICAL --exit-code 1 platform_unified_data_gcp/infra
+# Trivy IaC security scan (excluding downloaded .terraform / .terragrunt-cache vendor dirs)
+trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/.terraform' --skip-dirs '**/.terragrunt-cache' platform_unified_data_gcp/infra
 
-# Mocked OpenTofu unit tests
-for d in bootstrap modules/project_factory modules/vpc_network modules/budget_guardrail envs/dev; do
-  tofu -chdir="platform_unified_data_gcp/infra/${d}" test -verbose
-done
+# Mocked unit tests (Bootstrap + Platform via Terragrunt + Preflight Script)
+./platform_unified_data_gcp/scripts/test_bootstrap_init.sh
+tofu -chdir="platform_unified_data_gcp/infra/bootstrap" test -verbose
+UDP_GCP_OFFLINE_TEST=true terragrunt test --non-interactive --working-dir platform_unified_data_gcp/infra/envs/dev -verbose
 ```
+
+## Updating Upstream Module Versions (DRY — Zero Sync Scripts)
+
+Edit the pinned semantic release tag once in [`infra/module-versions.yaml`](./infra/module-versions.yaml). Terragrunt's [`infra/envs/root.hcl`](./infra/envs/root.hcl) reads it via `yamldecode(file(...))` and passes `cff_version` / `project_factory_version` as standard inputs into [`infra/platform/main.tf`](./infra/platform/main.tf) (via OpenTofu 1.8+ Early Variable Evaluation in `module.source`)—no sync scripts or generated module files needed.
 
 ## One-Time Bootstrap & Cloud KMS State Migration Runbook
 
@@ -87,14 +93,25 @@ gcloud auth login
 
 ### Phase 2: Migrate Bootstrap State to Encrypted GCS
 1. Uncomment the `backend "gcs"` block in `infra/bootstrap/backend.tf` (prefix `bootstrap`).
-2. Uncomment the `encryption` block in `infra/bootstrap/encryption.tf`, including the temporary `fallback { method = method.unencrypted.migrate }` block, and pass `TF_VAR_state_kms_key_id=<kms_key_id>`.
-3. Migrate local state to GCS and encrypt it:
+2. Uncomment `variable "state_kms_key_id"` and the `encryption` block in `infra/bootstrap/encryption.tf`. Keep `enforced = false` together with the temporary `method "unencrypted" "migrate"` and `fallback` blocks so OpenTofu can read your plaintext local `terraform.tfstate` during the one-time migration.
+3. Grant your local operator user KMS encrypt/decrypt access on the state key (project `roles/owner` deliberately excludes KMS data-plane access), then migrate local state to GCS and encrypt it (note the required `bucket=` key inside `-backend-config`):
    ```bash
-   export TF_VAR_state_kms_key_id="<kms_key_id>"
-   tofu init -migrate-state -backend-config="bucket=<state_bucket_name>"
+   cd platform_unified_data_gcp/infra/bootstrap
+
+   # Read outputs before migrating (if not already recorded)
+   STATE_BUCKET="$(tofu output -raw state_bucket_name)"
+   export TF_VAR_state_kms_key_id="$(tofu output -raw kms_key_id)"
+
+   # Ensure your local Org Admin can encrypt/decrypt the bootstrap state via Cloud KMS
+   gcloud kms keys add-iam-policy-binding "${TF_VAR_state_kms_key_id}" \
+     --member="user:$(gcloud config get-value account)" \
+     --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
+
+   # Migrate local plaintext state to encrypted GCS state
+   tofu init -migrate-state -backend-config="bucket=${STATE_BUCKET}"
    ```
-4. Verify the GCS state object is encrypted ciphertext (`gsutil cat gs://<state_bucket_name>/bootstrap/default.tfstate | head -c 200` shows `"meta"` + `"encrypted_data"`, not plaintext resources).
-5. **Remove** the `unencrypted` `fallback` block in `infra/bootstrap/encryption.tf` so plaintext state is permanently rejected, delete local `terraform.tfstate*`, and run `tofu plan` to confirm zero diff.
+4. Verify the GCS state object is encrypted ciphertext (`gcloud storage cat "gs://${STATE_BUCKET}/bootstrap/default.tfstate" | head -c 200` shows `"meta"` + `"encrypted_data"`, not plaintext resources).
+5. **Lock down encryption:** Remove the `method "unencrypted" "migrate"` and `fallback` blocks in `infra/bootstrap/encryption.tf`, set `enforced = true` so plaintext state is permanently rejected, delete local `terraform.tfstate*`, and run `tofu plan` to confirm zero diff.
 
 ## GitHub Actions Repository Variables (Managed Declaratively)
 
