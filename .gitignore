@@ -1,9 +1,10 @@
 # macOS
 .DS_Store
 
-# OpenTofu / Terraform working directories & state (never commit state!)
+# OpenTofu / Terraform / Terragrunt working directories & state (never commit state!)
 **/.terraform/
 **/.tofu/
+**/.terragrunt-cache/
 *.tfstate
 *.tfstate.*
 *.tfplan

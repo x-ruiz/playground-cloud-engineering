@@ -43,6 +43,7 @@ variables {
   seed_project_id    = "udp-seed-test-001"
   dev_project_id     = "udp-dev-test-001"
   budget_alert_email = "alerts@example.com"
+  state_kms_key_id   = "projects/udp-seed-test-001/locations/us-central1/keyRings/unified-data-platform-tofu-state/cryptoKeys/tofu-state-key"
 }
 
 # TC-009: Bootstrap hardening, WIF least privilege, and Folder-scoped IAM invariants

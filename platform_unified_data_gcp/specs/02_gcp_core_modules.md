@@ -1,6 +1,6 @@
 # Feature Spec: Reusable GCP Core Modules (`project_factory`, `vpc_network`, `budget_guardrail`)
 
-- **Status:** Approved
+- **Status:** Superseded (by `specs/03_platform_and_terragrunt_envs.md` — local `infra/modules/` removed in favor of tag-pinned public GitHub modules directly in `infra/platform/`)
 - **Module / Component:** `platform_unified_data_gcp/infra/modules/*` (OpenTofu `>= 1.8`, `hashicorp/google ~> 6.0`, `hashicorp/random ~> 3.6`)
 - **Archetype:** Infrastructure-as-Code Contract (Reusable Modules)
 - **Tier:** Full Spec
@@ -12,7 +12,7 @@
 ## 1. Goal & Context
 
 ### Problem Statement
-Environment roots (`envs/dev`, and future `envs/staging` / `envs/prod`) must provision GCP projects, custom-mode VPC networking, and billing guardrails consistently without duplicating HCL, leaking default networks, omitting mandatory labels, or incurring idle NAT costs. Encapsulating these primitives into three self-contained, offline-testable OpenTofu modules establishes a clean, repeatable platform contract.
+The shared platform composition (`infra/platform/`, consumed by Terragrunt environment wrappers `envs/dev`, `envs/uat`, and `envs/prod`) must provision GCP projects, custom-mode VPC networking, and billing guardrails consistently without duplicating HCL, leaking default networks, omitting mandatory labels, or incurring idle NAT costs. Encapsulating these primitives into three self-contained, offline-testable OpenTofu modules establishes a clean, repeatable platform contract.
 
 ### Success Metrics
 - All three modules pass `tofu fmt -check -recursive`, `tofu validate`, `tflint` (Google ruleset), `trivy config` (zero HIGH/CRITICAL findings), and offline `tofu test` (`mock_provider`) with zero GCP credentials or cost.
@@ -32,10 +32,10 @@ Environment roots (`envs/dev`, and future `envs/staging` / `envs/prod`) must pro
 - Strict OpenTofu `validation` blocks on all critical module inputs and offline `tests/*.tftest.hcl` suites using `mock_provider`.
 
 ### Non-Goals (Do Not Implement)
-- **No environment root or CI workflows:** `infra/envs/dev/` and GitHub Actions pipelines live in Spec 03.
+- **No environment wrappers or CI workflows:** `infra/platform/`, Terragrunt `infra/envs/{dev,uat,prod}/`, and GitHub Actions pipelines live in Spec 03.
 - **No Shared VPC / peering / Cloud VPN:** Single-project isolated VPCs only.
 - **No data services:** No GCS medallion buckets, BigQuery datasets, BigLake catalogs, Dataproc, or Pub/Sub.
-- **No Terragrunt or external wrapper frameworks:** Plain modular OpenTofu HCL only.
+- **No Terragrunt inside leaf modules:** `infra/modules/*` remain plain reusable OpenTofu HCL modules (Terragrunt wraps `infra/platform/` in Spec 03).
 
 ---
 
@@ -45,7 +45,7 @@ Environment roots (`envs/dev`, and future `envs/staging` / `envs/prod`) must pro
 - `REQ-02`: **Project Factory (`modules/project_factory`)** — Provision a GCP project under `folder_id` with a 4-char hex suffix appended to `project_id`, linked to `billing_account_id`, `auto_create_network = false`, mandatory labels merged without allowing callers to drop them, APIs enabled with `disable_on_destroy = false`, and `deletion_policy` defaulting to `"PREVENT"`.
 - `REQ-03`: **Baseline VPC Network (`modules/vpc_network`)** — Provision a custom-mode VPC (`auto_create_subnetworks = false`), regional subnet with `private_ip_google_access = true`, opt-in VPC Flow Logs (`enable_flow_logs = false` default), baseline firewalls (allow IAP TCP `22` from `35.235.240.0/20` to `iap_ssh_target_tags`, allow intra-subnet traffic, explicit low-priority deny-all-ingress), and opt-in Cloud Router + Cloud NAT gated by `enable_cloud_nat` (default `false`).
 - `REQ-04`: **Budget Guardrail (`modules/budget_guardrail`)** — Provision a Cloud Monitoring email notification channel in `project_id` and a GCP Billing Budget on `billing_account_id` filtered strictly to `projects/<project_number>` with actual and forecasted threshold rules (default `[0.5, 0.8, 1.0]`).
-- `REQ-05`: **Input Validation & Mandatory Labels** — Enforce `validation` blocks for environment enum (`dev|staging|prod`), billing account regex, project ID format, valid IPv4 CIDR (`cidrhost`), positive `monthly_amount_usd`, valid threshold percents (`> 0` and `<= 2.0`), and lowercase GCP-compliant labels (`managed_by = "opentofu"`, `platform`, `environment`, `cost_center`).
+- `REQ-05`: **Input Validation & Mandatory Labels** — Enforce `validation` blocks for environment enum (`dev|uat|prod`), billing account regex, project ID format, valid IPv4 CIDR (`cidrhost`), positive `monthly_amount_usd`, valid threshold percents (`> 0` and `<= 2.0`), and lowercase GCP-compliant labels (`managed_by = "opentofu"`, `platform`, `environment`, `cost_center`).
 - `REQ-06`: **Offline Mocked Unit Tests** — Every module shall ship a `tests/*.tftest.hcl` suite using OpenTofu `mock_provider` verifying both happy-path resource invariants and `expect_failures` negative validation cases.
 
 ---
@@ -60,7 +60,7 @@ Environment roots (`envs/dev`, and future `envs/staging` / `envs/prod`) must pro
 | Input | `project_name` | `string` | Required | Display name (4–30 chars). |
 | Input | `folder_id` | `string` | Required | Parent Folder ID (`folders/<id>` or numeric ID normalized cleanly). |
 | Input | `billing_account_id` | `string` | Required | Format `^[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$`. |
-| Input | `environment` | `string` | Required | Allowed: `dev`, `staging`, `prod`. |
+| Input | `environment` | `string` | Required | Allowed: `dev`, `uat`, `prod`. |
 | Input | `activate_apis` | `set(string)` | `[]` | Enabled with `disable_on_destroy = false`. |
 | Input | `deletion_policy` | `string` | `"PREVENT"` | Allowed: `PREVENT`, `DELETE`, `ABANDON`. |
 | Input | `labels` | `map(string)` | `{}` | Merged with mandatory labels (cannot override `managed_by`). |

@@ -1,0 +1,157 @@
+name: UDP GCP — Apply Environments (dev -> uat -> prod)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "platform_unified_data_gcp/infra/module-versions.yaml"
+      - "platform_unified_data_gcp/infra/platform/**"
+      - "platform_unified_data_gcp/infra/envs/**"
+      - ".github/workflows/udp-gcp-apply.yml"
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Environment to apply (dev, uat, or prod)"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+
+permissions: {}
+
+env:
+  OPENTOFU_VERSION: "1.13.10"
+  TERRAGRUNT_VERSION: "1.2.2"
+  PROJECT_DIR: "platform_unified_data_gcp"
+  TG_TF_PATH: "tofu"
+  UDP_GCP_STATE_BUCKET: ${{ vars.UDP_GCP_STATE_BUCKET }}
+  UDP_GCP_STATE_KMS_KEY_ID: ${{ vars.UDP_GCP_STATE_KMS_KEY_ID }}
+  UDP_GCP_PLATFORM_FOLDER_ID: ${{ vars.UDP_GCP_PLATFORM_FOLDER_ID }}
+  UDP_GCP_BILLING_ACCOUNT_ID: ${{ vars.UDP_GCP_BILLING_ACCOUNT_ID }}
+  UDP_GCP_BUDGET_ALERT_EMAIL: ${{ vars.UDP_GCP_BUDGET_ALERT_EMAIL }}
+  UDP_GCP_DEV_PROJECT_ID: ${{ vars.UDP_GCP_DEV_PROJECT_ID || 'udp-dev' }}
+  UDP_GCP_UAT_PROJECT_ID: ${{ vars.UDP_GCP_UAT_PROJECT_ID || 'udp-uat' }}
+  UDP_GCP_PROD_PROJECT_ID: ${{ vars.UDP_GCP_PROD_PROJECT_ID || 'udp-prod' }}
+
+jobs:
+  apply-dev:
+    name: Apply Dev (Main-Only WIF)
+    if: github.event_name == 'push' || inputs.target_env == 'dev'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: udp-gcp-dev-apply
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+
+      - name: Setup Terragrunt
+        uses: gruntwork-io/terragrunt-action@v3
+        with:
+          tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tg_command: "--version"
+
+      - name: Authenticate to GCP via WIF (Apply SA — main only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.UDP_GCP_APPLY_SA }}
+
+      - name: Terragrunt Init, Plan & Apply (dev)
+        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/dev
+        run: |
+          terragrunt init --non-interactive -input=false
+          terragrunt plan --non-interactive -input=false -no-color -out=tfplan
+          terragrunt apply --non-interactive -input=false -no-color -auto-approve tfplan
+
+  apply-uat:
+    name: Apply UAT (Gated Approval)
+    if: always() && ((github.event_name == 'push' && needs.apply-dev.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'uat'))
+    needs: [apply-dev]
+    runs-on: ubuntu-latest
+    environment: uat
+    concurrency:
+      group: udp-gcp-uat-apply
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+
+      - name: Setup Terragrunt
+        uses: gruntwork-io/terragrunt-action@v3
+        with:
+          tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tg_command: "--version"
+
+      - name: Authenticate to GCP via WIF (Apply SA — main only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.UDP_GCP_APPLY_SA }}
+
+      - name: Terragrunt Init, Plan & Apply (uat)
+        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/uat
+        run: |
+          terragrunt init --non-interactive -input=false
+          terragrunt plan --non-interactive -input=false -no-color -out=tfplan
+          terragrunt apply --non-interactive -input=false -no-color -auto-approve tfplan
+
+  apply-prod:
+    name: Apply Prod (Gated Approval)
+    if: always() && ((github.event_name == 'push' && needs.apply-uat.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.target_env == 'prod'))
+    needs: [apply-uat]
+    runs-on: ubuntu-latest
+    environment: prod
+    concurrency:
+      group: udp-gcp-prod-apply
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.OPENTOFU_VERSION }}
+
+      - name: Setup Terragrunt
+        uses: gruntwork-io/terragrunt-action@v3
+        with:
+          tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tg_command: "--version"
+
+      - name: Authenticate to GCP via WIF (Apply SA — main only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.UDP_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.UDP_GCP_APPLY_SA }}
+
+      - name: Terragrunt Init, Plan & Apply (prod)
+        working-directory: ${{ env.PROJECT_DIR }}/infra/envs/prod
+        run: |
+          terragrunt init --non-interactive -input=false
+          terragrunt plan --non-interactive -input=false -no-color -out=tfplan
+          terragrunt apply --non-interactive -input=false -no-color -auto-approve tfplan
