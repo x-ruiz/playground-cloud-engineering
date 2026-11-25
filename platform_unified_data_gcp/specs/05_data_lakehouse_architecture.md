@@ -5,7 +5,7 @@
 - **Archetype:** Data Pipeline Contract + Infrastructure-as-Code & GitOps (Architecture Overview / Epic)
 - **Tier:** Full Spec (architecture parent of Mini-Specs `06`–`13`)
 - **Owner:** Xavier Ruiz
-- **Depends On:** `specs/01_gcp_bootstrap_and_wif.md`, `specs/03_platform_and_terragrunt_envs.md`, `specs/04_github_actions_cicd.md`
+- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap) *(graduated from `specs/01_gcp_bootstrap_and_wif.md`)*, `specs/03_platform_and_terragrunt_envs.md`, `specs/04_github_actions_cicd.md`
 - **Related:** `playground-data-engineering/maven_projects/sdk_lakehouse/specs/05_iceberg_gcp_biglake_plugin.md` (`gcp_biglake` SPI plugin)
 
 ---
@@ -13,13 +13,13 @@
 ## 1. Goal & Context
 
 ### Problem Statement
-Specs 01–04 deliver per-environment GCP projects, networking, budgets and GitOps promotion, but no data layer. We need one architecture for how data lands, is stored, governed and served on GCP before writing implementation mini-specs. The chosen design is a **data mesh on a view-first ELT lakehouse**. Each **domain is a business function that owns its data** end to end and publishes it as a data product (its `gold_<domain>` views). The platform provides self-serve infrastructure and enforces global policies automatically in CI. Inside a domain, ingestion writes append-only **Apache Iceberg bronze** tables, and **silver and gold are BigQuery views**, so nothing runs while idle.
+Org bootstrap (`platform_gcp_org_bootstrap`) and Specs 03–04 deliver per-environment GCP projects, networking, budgets, and GitOps promotion, but no data layer. We need one architecture for how data lands, is stored, governed, and served on GCP before writing implementation mini-specs. The chosen design is a **data mesh on a view-first ELT lakehouse**. Each **domain is a business function that owns its data** end to end and publishes it as a data product (`gold_<domain>`). The platform provides self-serve **project-level** infrastructure and enforces global policies in CI. Inside a domain, ingestion writes append-only **GCP-managed Apache Iceberg bronze** tables (managed via BigLake REST endpoints by `sdk-lakehouse`), and **Day-1 silver and gold are BigQuery views**, so nothing runs while idle.
 
 ### Success Metrics
-- Onboarding a new domain only requires adding `lakehouse/domains/<domain>/` (with `domain.yaml`) and a `CODEOWNERS` entry. The platform provisions everything else.
+- Onboarding a new domain requires only adding `lakehouse/domains/<domain>/` (with `domain.yaml`) and a `CODEOWNERS` entry; the platform provisions all project-level resources automatically.
 - With `enable_streaming = false`, an environment runs **zero always-on compute**, and idle cost stays within the Spec 03 budgets (`$50` / `$100` / `$250`).
-- The reference domain (`football`) flows source → landing → bronze → silver → gold in `dev`. Every view built on a bronze table can be found by name or by label.
-- Full verification coverage of `TC-001` through `TC-015`.
+- The reference domain (`football`) flows source → landing → bronze → silver → gold in `dev` across the 3-stage deployment pipeline (`infra/lakehouse` → `sdk-lakehouse` → view deploy) with full traceability by name and lineage metadata.
+- Full verification coverage of `TC-001` through `TC-014`.
 
 ---
 
@@ -30,16 +30,16 @@ Specs 01–04 deliver per-environment GCP projects, networking, budgets and GitO
 ```mermaid
 flowchart TB
     subgraph GOV["Federated Computational Governance (global policies as CI checks)"]
-        POL["Naming grammar · bronze metadata columns · lineage labels<br/>cross-domain access via gold only · domain.yaml + CODEOWNERS"]
+        POL["Naming grammar · bronze metadata columns · schema compatibility<br/>lineage labels · cross-domain gold-only · domain.yaml + CODEOWNERS"]
     end
     subgraph D1["Domain: football (business function, owns its data)"]
-        B1[("bronze.football")] --> S1["silver_football<br/>(internal)"] --> G1["gold_football<br/>(data product)"]
+        B1[("bronze.football<br/>(managed Iceberg)")] --> S1["silver_football<br/>(internal)"] --> G1["gold_football<br/>(data product)"]
     end
     subgraph D2["Domain: finance (business function, owns its data)"]
-        B2[("bronze.finance")] --> S2["silver_finance<br/>(internal)"] --> G2["gold_finance<br/>(data product)"]
+        B2[("bronze.finance<br/>(managed Iceberg)")] --> S2["silver_finance<br/>(internal)"] --> G2["gold_finance<br/>(data product)"]
     end
-    subgraph PLAT["Self-Serve Data Platform (infra/lakehouse + CI)"]
-        P["From domain.yaml: namespace · datasets · ingest SA<br/>owner IAM · raw__ views · deploy pipelines"]
+    subgraph PLAT["Self-Serve Platform (infra/lakehouse + sdk-lakehouse + CI)"]
+        P["Stage 1 (OpenTofu): catalog · buckets · datasets · project-level IAM<br/>Stage 2 (sdk-lakehouse): bronze namespaces & tables via REST endpoints<br/>Stage 3 (View deploy, Spec 12): silver/gold views from shared table metadata"]
     end
     G1 -->|"cross-domain consumption: product views only"| G2
     G1 --> C["Analysts / BI"]
@@ -55,13 +55,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     SRC["Batch sources"] --> CRJ["Cloud Run job<br/>sa-ingest-&lt;domain&gt;"] --> LAND[("landing/&lt;domain&gt;/…")] --> CRJ
-    CRJ -->|append| BRZ[("bronze.&lt;domain&gt;.&lt;entity&gt;<br/>REST catalog (OpenTofu) · tables (sdk-lakehouse)")]
-    EVT["Events"] --> PS["Pub/Sub (schema + DLQ)"] -->|"opt-in enable_streaming"| BRS[("bronze_stream.&lt;domain&gt;__&lt;entity&gt;<br/>BigQuery-managed Iceberg")]
-    BRZ --> SIL["silver_&lt;domain&gt;.&lt;entity&gt;"]
-    BRS --> SIL
-    SIL --> CUR["gold_&lt;domain&gt;.&lt;kind&gt;__&lt;entity&gt;__*"]
-    BRZ -.-> RAW["gold_&lt;domain&gt;.raw__&lt;entity&gt; (generated)"]
-    BRS -.-> RAW
+    CRJ -->|append| BRZ[("bronze.&lt;domain&gt;.&lt;entity&gt;<br/>GCP-managed Iceberg via BigLake REST<br/>catalog: OpenTofu · tables: sdk-lakehouse")]
+    EVT["Events"] --> PS["Pub/Sub (schema + DLQ)"] -->|"opt-in enable_streaming"| BRZ
+    BRZ --> SIL["silver_&lt;domain&gt;.&lt;entity&gt;<br/>conform + dedup"]
+    SIL --> CUR["gold_&lt;domain&gt;.&lt;kind&gt;__&lt;entity&gt;__*<br/>curated data product"]
 ```
 
 ---
@@ -69,54 +66,55 @@ flowchart LR
 ## 3. Scope & Explicit Non-Goals
 
 ### In Scope
-- **Data mesh operating model:** domain ownership, gold-as-data-product, the self-serve platform and federated governance (§5.1).
-- **Stack boundary:** a separate `infra/lakehouse/` Terragrunt stack per env with its own state (`envs/<env>/lakehouse`) and tags (`udp-lakehouse-vX.Y.Z`), reading `infra/platform` outputs.
-- **Layer model:** a landing zone; bronze Iceberg tables (batch tables in the BigLake REST catalog, streaming tables as BigQuery-managed Iceberg); per-domain silver and gold BigQuery view datasets; generated `raw__` views.
-- **Ownership split:** OpenTofu provisions the infrastructure (buckets, catalog, datasets, connections). `sdk-lakehouse` manages only the **namespaces and tables** inside the catalog.
-- **Cross-cutting rules:** batch and opt-in streaming ingestion, naming and lineage, IAM, maintenance, observability, the materialization escape hatch, and the Mini-Spec roadmap (§5.7).
+- **Data mesh operating model:** domain ownership, gold-as-data-product, self-serve platform, and federated computational governance (§5.1).
+- **Stack & IAM boundary:** a separate `infra/lakehouse/` Terragrunt stack per env (`envs/<env>/lakehouse` state, `udp-lakehouse-vX.Y.Z` tags) consuming `infra/platform` outputs. **All lakehouse IAM is strictly project-level** inside each environment GCP project.
+- **3-stage deployment boundary:** Stage 1 OpenTofu provisions durable infra (buckets, managed Iceberg catalog, BigQuery datasets/connections, project-level IAM); Stage 2 `sdk-lakehouse` manages **only namespaces and tables** via BigLake REST endpoints from domain `table.yaml` / `table.proto`; Stage 3 (Bronze → Silver → Gold view deployment mechanism designed in Mini-Spec `12`) references those same table definitions alongside Silver/Gold SQL.
+- **Unified managed Iceberg Bronze:** GCS landing zone + GCP-managed Apache Iceberg bronze tables accessed via BigLake REST endpoints (batch on by default; streaming opt-in via `enable_streaming`).
+- **Cross-cutting rules:** naming & collision-free lineage, schema compatibility, runtime data quality & alerting, selective materialization escape hatch, and the Mini-Spec roadmap (§5.7).
 
 ### Non-Goals (Do Not Implement)
-- **No per-domain GCP projects:** domains are isolated by namespace, dataset and IAM inside each env project. Project-per-domain is a possible future spec.
-- **No catalog lifecycle in `sdk-lakehouse`**, no Spark/Dataflow transformation pipelines, no Cloud Composer.
-- **No physical silver or gold by default** (only via `REQ-10`), no Iceberg catalog views, no hand-written `raw__` views.
-- **Deferred to future specs:** CMEK, VPC-SC, Dataplex catalog and lineage UI, policy tags and masking, data-product SLAs and contracts beyond `domain.yaml`.
+- **No org- or folder-level IAM changes:** Org/folder foundations belong exclusively in `x-ruiz/platform_gcp_org_bootstrap`; all lakehouse principals and bindings live at the env project level.
+- **No catalog lifecycle in `sdk-lakehouse`:** it never creates, alters, or deletes catalogs—only namespaces and tables via REST endpoints.
+- **No raw passthrough (`raw__`) views in gold:** analyst access to raw bronze (with PII controls/masking) is deferred to a future spec.
+- **No non-BigQuery engine or physical Silver/Gold on Day 1:** Silver and Gold start as BigQuery views (`REQ-10` provides an in-BigQuery materialization escape hatch). Multi-engine physical Iceberg Silver/Gold (e.g., Spark/Trino/DuckDB readers), Spark/Dataflow pipelines, and Cloud Composer are deferred as future enhancements.
+- **No per-domain GCP projects on Day 1:** domains isolate via namespace, dataset, and project-level IAM inside each env project.
+- **Deferred to future specs:** CMEK, VPC-SC, Dataplex catalog/lineage UI, column-level policy tags & PII masking, automated GDPR/CCPA purge workflows, and cross-domain shared marts (`gold_shared`).
 
 ---
 
 ## 4. Functional Requirements
 
-- `REQ-01`: **Separate Lakehouse Stack.** All data-layer resources shall live in `infra/lakehouse/`. It consumes `project_id`, `region` and `subnet_id` from platform outputs and follows Spec 04 promotion (`dev` tracks `main`; `uat`/`prod` pin `udp-lakehouse-vX.Y.Z`).
-- `REQ-02`: **Domain Ownership & Self-Serve Onboarding.** Each domain shall correspond to one business function, declared in `lakehouse/domains/<domain>/domain.yaml` (§5.1), with a `CODEOWNERS` entry for its folder. From that file the platform shall provision, with no domain-written infrastructure code: bronze namespace `<domain>`, datasets `silver_<domain>` and `gold_<domain>`, `sa-ingest-<domain>`, owner-group IAM and a landing prefix.
-- `REQ-03`: **Landing Zone.** Batch sources shall first write raw, unmodified payloads to `landing/<domain>/<source>/ingest_date=YYYY-MM-DD/<run_id>/`. Objects are immutable, which allows replay and backfill.
-- `REQ-04`: **Bronze Tables.** OpenTofu shall provision one BigLake Iceberg REST catalog per env (logical name `bronze` in every env). `sdk-lakehouse` (`gcp_biglake`) shall manage only the namespaces and tables inside it, from domain YAML. When `enable_streaming = true`, Pub/Sub topics with an attached schema shall deliver events into BigQuery-managed Iceberg tables in `bronze_stream`, with a dead-letter topic for rejected messages. When `false`, zero streaming resources exist.
-- `REQ-05`: **Ingestion-Time Hygiene.** Every bronze row shall carry the §5.3 metadata columns. Records that fail schema checks go to quarantine (`landing/_quarantine/<domain>/`) or the DLQ and are never dropped silently. Ingestion shall contain no business logic.
-- `REQ-06`: **Silver Views (Domain-Internal).** Each bronze entity shall have exactly one `silver_<domain>.<entity>` view that types, conforms and **deduplicates** on `_event_key` (keeping the latest `_ingested_at`) and merges batch and streaming rows. Silver shall not be readable outside its domain.
-- `REQ-07`: **Gold Views = Data Product.** `gold_<domain>` is the domain's only published interface. Curated gold views shall read their own domain's silver or **other domains' `gold_*` views**, and never another domain's silver or bronze. Gold datasets are authorized against their sources.
-- `REQ-08`: **Definitions as Code.** Every namespace, table and view shall be declared under `lakehouse/domains/<domain>/` and deployed by CI after a domain-owner review (`CODEOWNERS`). Manual DDL is forbidden in `uat`/`prod`.
-- `REQ-09`: **Storage Layout for View Performance.** Bronze tables shall declare Iceberg partitioning (default `day(_ingested_at)`). BigQuery-managed tables shall cluster on `_event_key`.
-- `REQ-10`: **Selective Materialization Escape Hatch.** A curated gold view may be materialized into a BigQuery-managed Iceberg table by a scheduled query only with an entry in `lakehouse/materializations.yaml` citing the measured scan cost or latency. It keeps its exact name and labels.
-- `REQ-11`: **Least-Privilege Access.** Access shall follow §5.5. Ingest identities are scoped to their own domain, the CI identity owns DDL, domain owners read their own domain, and analysts read only `gold_*`.
-- `REQ-12`: **Maintenance & Observability.** Bronze REST-catalog tables shall get scheduled snapshot expiry, orphan-file removal and compaction. Ingestion failures, DLQ backlog and maintenance failures shall alert the Spec 03 channel, labeled with `domain`.
-- `REQ-13`: **Generated Raw Views.** For every bronze table, the stack shall automatically create `gold_<domain>.raw__<entity>` as a column-for-column passthrough, created or removed in the same apply as its source table.
-- `REQ-14`: **Federated Computational Governance.** CI shall reject any change that breaks a global policy:
-  - the §5.4 naming grammar;
+- `REQ-01`: **Separate Lakehouse Stack.** All data-layer infra shall live in `infra/lakehouse/`, consuming `project_id`, `project_number`, `region`, and `subnet_id` from `infra/platform` outputs and following Spec 04 promotion (`dev` tracks `main`; `uat`/`prod` pin `udp-lakehouse-vX.Y.Z`).
+- `REQ-02`: **Domain Ownership & Self-Serve Onboarding.** Each domain shall map to one business function declared in `lakehouse/domains/<domain>/domain.yaml` (§5.1) with a `CODEOWNERS` entry. From that file, Stage 1 (`infra/lakehouse`) shall provision project-level resources with zero domain-written HCL: `silver_<domain>` and `gold_<domain>` datasets, `sa-ingest-<domain>`, owner-group project/dataset IAM, and landing prefix access.
+- `REQ-03`: **Landing Zone.** Batch sources shall first write raw, unmodified payloads to `landing/<domain>/<source>/ingest_date=YYYY-MM-DD/<run_id>/`. Objects are immutable within retention for deterministic replay and backfill.
+- `REQ-04`: **Unified Managed Iceberg Bronze.** Stage 1 (OpenTofu) shall provision one GCP-managed BigLake Iceberg REST catalog per env (logical name `bronze` in every env), its GCS warehouse bucket, and BigQuery connection. Stage 2 (`sdk-lakehouse` `gcp_biglake` plugin) shall manage **only namespaces (one per domain) and tables** through the BigLake REST endpoints from domain `table.yaml` / `table.proto` files. When `enable_streaming = true`, Pub/Sub topics (with attached schemas and DLQ) shall land events into managed Iceberg bronze tables (`ADR-05`/`ADR-07`); when `false`, zero streaming resources exist.
+- `REQ-05`: **Ingestion-Time Hygiene.** Every bronze row shall carry the §5.3 metadata columns. Records failing schema checks route to `landing/_quarantine/<domain>/` (batch) or the DLQ (streaming) and are never dropped silently. Ingestion contains no business logic.
+- `REQ-06`: **Silver Views (Domain-Internal).** Each bronze entity shall have one `silver_<domain>.<entity>` BigQuery view that types, conforms, and **deduplicates** on `_event_key` (keeping latest `_ingested_at`). Silver shall not be readable outside its domain.
+- `REQ-07`: **Gold Views = Data Product.** `gold_<domain>` is the domain's sole published interface. Gold views shall read only their own domain's silver or **other domains' `gold_*` views**—never bronze directly and never another domain's silver. Gold datasets are authorized against their upstream sources.
+- `REQ-08`: **3-Stage Definitions as Code.** Every bronze table (`table.yaml` / `table.proto`), silver view, and gold view shall live under `lakehouse/domains/<domain>/`, reviewed via `CODEOWNERS` and deployed strictly by CI in order: Stage 1 (`infra/lakehouse` OpenTofu) → Stage 2 (`sdk-lakehouse` Bronze DDL) → Stage 3 (Silver/Gold view deploy referencing the same domain table metadata; implementation tool finalized in Mini-Spec `12`). Manual DDL is forbidden in `uat`/`prod`.
+- `REQ-09`: **Storage Layout for View Performance.** Bronze Iceberg tables shall declare partitioning (default `day(_ingested_at)`, overridable per table) and clustering/sort order on `_event_key` where supported by managed Iceberg, so view predicates prune storage.
+- `REQ-10`: **Selective Materialization Escape Hatch.** Any silver dedup view or curated gold view that exceeds measured scan-cost or latency thresholds may be incrementally materialized into a BigQuery-managed Iceberg table via `lakehouse/materializations.yaml` (citing measured cost/latency). It preserves its exact name and labels so consumers and lineage remain unaffected.
+- `REQ-11`: **Project-Level Least-Privilege Access.** All principals and IAM bindings (§5.5) shall be scoped strictly within the environment GCP project (bucket/prefix, catalog namespace, dataset). Ingest identities write only their own domain; CI owns DDL without catalog create/delete; domain owners read their own domain; analysts read only `gold_*`.
+- `REQ-12`: **Managed Maintenance, Data Quality & Observability.** Managed Iceberg relies on GCP-managed storage optimization/compaction, supplemented by snapshot/retention policy verification (safe orphan retention `>= 72h` where configurable). Scheduled runtime data-quality assertions (freshness, Silver `_event_key` uniqueness, non-null keys), ingestion failures, and DLQ backlogs shall alert the Spec 03 notification channel, labeled with `domain`.
+- `REQ-13`: **Federated Computational Governance.** CI shall reject any PR violating global policies:
+  - the §5.4 naming grammar or BigQuery label limits (`<= 64` labels, `<= 63`-char keys);
   - missing `domain.yaml` or `CODEOWNERS`;
-  - missing bronze metadata columns or lineage labels;
-  - a cross-domain read of silver or bronze;
-  - a view whose declared `sources` differ from the tables a BigQuery dry-run reports it reads.
+  - missing §5.3 bronze metadata columns or unapproved breaking schema changes (column drop / type narrowing) in `table.yaml` / `table.proto`;
+  - a gold view reading bronze directly or any cross-domain read of silver/bronze;
+  - a view whose declared `sources` differ from the tables a BigQuery dry-run reports it references.
 
 ---
 
 ## 5. Interface & Data Contract
 
-### 5.1 Data Mesh Ownership Contract
+### 5.1 Data Mesh Ownership & 3-Stage Deployment Contract
 
 | Mesh Principle | Implementation | Owned By |
 | :--- | :--- | :--- |
-| Domain ownership | One business function = one domain = one folder, bronze namespace, `silver_`/`gold_` datasets and ingest SA | Domain owner group |
-| Data as a product | `gold_<domain>` curated and `raw__` views, described by `domain.yaml` and view sidecars | Domain owner group |
-| Self-serve platform | `infra/lakehouse` turns `domain.yaml` into infrastructure and runs the deploy pipelines | Platform owner |
-| Federated computational governance | Global policies (`REQ-14`) run as CI checks on every PR | Platform defines; domains comply |
+| Domain ownership | One business function = one folder, bronze namespace, `silver_`/`gold_` datasets, and project-level ingest SA | Domain owner group |
+| Data as a product | `gold_<domain>` curated views described by `domain.yaml` and view sidecars | Domain owner group |
+| Self-serve platform | Stage 1 OpenTofu (`infra/lakehouse`) → Stage 2 `sdk-lakehouse` (REST DDL) → Stage 3 view deploy (Spec `12`) | Platform owner |
+| Federated computational governance | Global policies (`REQ-13`) run as automated CI checks on every PR | Platform defines; domains comply |
 
 ```yaml
 # lakehouse/domains/football/domain.yaml
@@ -126,95 +124,96 @@ owner_group: football-data-owners@<org-domain>
 description: "Premier League matches, teams and player stats"
 ```
 
-### 5.2 Storage, Catalog & Dataset Inventory (per env, same region)
+### 5.2 Storage, Catalog & Dataset Inventory (per env project, same region)
 
-| Layer | Resource | Name Pattern | Provisioned By | Contents Managed By |
+| Layer | Resource | Name Pattern | Provisioned By (Stage 1) | Contents Managed By |
 | :--- | :--- | :--- | :--- | :--- |
 | Landing | GCS bucket (per-domain prefixes) | `udp-<env>-landing-<suffix>` | OpenTofu | `sa-ingest-<domain>` |
-| Bronze (batch) | GCS bucket + BigLake REST catalog `bronze` | `udp-<env>-bronze-<suffix>` | OpenTofu | `sdk-lakehouse` (namespace per domain, tables) |
-| Bronze (stream) | GCS bucket + dataset `bronze_stream` + connection | `udp-<env>-bronze-stream-<suffix>` | OpenTofu | OpenTofu (opt-in `enable_streaming`) |
-| Silver / Gold | BigQuery datasets per domain | `silver_<domain>`, `gold_<domain>` | OpenTofu (from `domain.yaml`) | OpenTofu (views, `raw__` generation) |
+| Bronze | GCS warehouse + BigLake managed Iceberg REST catalog `bronze` + BQ connection | `udp-<env>-bronze-<suffix>` | OpenTofu | Stage 2: `sdk-lakehouse` (namespaces & tables via REST endpoints) |
+| Silver / Gold | BigQuery datasets per domain | `silver_<domain>`, `gold_<domain>` | OpenTofu (from `domain.yaml`) | Stage 3: View deployer referencing domain `table.yaml`/`table.proto` + SQL (Mini-Spec `12`) |
 
-All buckets use uniform bucket-level access, enforced public access prevention, soft delete and lifecycle rules (landing goes to Nearline after 30d and is deleted after `landing_retention_days`). All resources carry the Spec 03 labels plus `layer` and `domain`.
+All buckets enforce UBLA, public access prevention, soft delete, and lifecycle rules (landing transitions to Nearline after 30d and expires after `landing_retention_days`: `dev` 30, `prod` 365). All resources carry Spec 03 labels plus `layer` and `domain`.
 
 ### 5.3 Bronze Row Contract (Mandatory Metadata Columns)
 
 | Column | Type | Rule |
 | :--- | :--- | :--- |
-| `_ingested_at` | `timestamp` (UTC) | Set at commit; default partition source |
+| `_ingested_at` | `timestamp` (UTC) | Set by writer at commit; default partition source |
 | `_source` / `_batch_id` | `string` | `<domain>.<source>` / Cloud Run execution or Pub/Sub message ID |
 | `_source_uri` | `string` (nullable) | Landing object URI (batch only), used for replay lineage |
-| `_event_key` | `string` | Declared business key for silver dedup |
+| `_event_key` | `string` | Declared business key for silver deduplication |
 
 ### 5.4 Naming & Lineage Convention
 
-Names are `snake_case`, and `__` is reserved as the token separator. `<entity>` (the bronze table name) is the anchor that makes every downstream object traceable.
+Names are `snake_case`; `__` is reserved as the token separator, and `<entity>` anchors traceability.
 
 | Object | Pattern | Example |
 | :--- | :--- | :--- |
-| Bronze batch / stream table | `bronze.<domain>.<entity>` / `bronze_stream.<domain>__<entity>` | `bronze.football.matches` |
-| Silver view (1:1) | `silver_<domain>.<entity>` | `silver_football.matches` |
-| Raw gold view (generated) | `gold_<domain>.raw__<entity>` | `gold_football.raw__matches` |
-| Curated gold view | `gold_<domain>.<kind>__<entity>__<qualifier>`, where `kind` ∈ `dim`, `fct`, `agg`, `rpt` | `gold_football.agg__matches__team_season_standings` |
+| Bronze table (managed Iceberg) | `bronze.<domain>.<entity>` | `bronze.football.matches` |
+| Silver view (1:1 per entity) | `silver_<domain>.<entity>` | `silver_football.matches` |
+| Curated gold view | `gold_<domain>.<kind>__<entity>__<qualifier>` (`kind` ∈ `dim`, `fct`, `agg`, `rpt`) | `gold_football.agg__matches__team_season_standings` |
 
-Every silver and curated gold view has a YAML sidecar (`description`, `grain`, `owner`, `sources`). On deploy, every view gets labels `domain`, `layer`, `view_kind`, and one `src_<entity>` label valued with that entity's domain, so cross-domain lineage stays visible. Views can be traced by name (`*__<entity>__*`) or through `INFORMATION_SCHEMA.TABLE_OPTIONS`.
+Every silver and gold view has a YAML sidecar (`description`, `grain`, `owner`, `sources`). On deploy, every view receives labels `domain`, `layer`, `view_kind`, and collision-free `src_<source_domain>__<entity> = "true"` (validated against BigQuery's 64-label / 63-char key limits). Views are traceable by name (`*__<entity>__*`) or via `INFORMATION_SCHEMA.TABLE_OPTIONS`.
 
-### 5.5 IAM / Security Principal Matrix
+### 5.5 Project-Level IAM / Security Principal Matrix
 
-| Principal | Auth / Condition | Scope | Access |
+All service accounts and IAM bindings below are provisioned **strictly at the environment GCP project level** (zero folder/org IAM required beyond `platform_gcp_org_bootstrap`).
+
+| Principal | Auth / Condition | Project-Level Scope | Access |
 | :--- | :--- | :--- | :--- |
-| `sa-ingest-<domain>` | Cloud Run job identity | `landing/<domain>/` prefix, `bronze.<domain>` tables | Write and append only; no DDL |
-| Pub/Sub service agent | Google-managed | `bronze_stream` | Write table data |
-| `sa-lakehouse-ddl` | GitHub Actions WIF (`main` for apply) | Namespaces, tables, datasets, views | DDL only; **no** catalog create/delete |
-| `sa-maintenance` | Scheduler-invoked job | `bronze` tables | Table maintenance only |
+| `sa-ingest-<domain>` | Cloud Run job identity | `landing/<domain>/` prefix, `bronze.<domain>` tables | Write landing; append rows; no DDL |
+| Pub/Sub / streaming writer SA | Project service agent / writer SA | `bronze` streaming tables (opt-in) | Append table data only |
+| `sa-lakehouse-ddl` | GitHub Actions WIF (`main` for apply) | `bronze` namespaces/tables; `silver_*` & `gold_*` views | Namespace/table/view DDL; **no** catalog create/delete |
+| BigQuery connection SA | Google-managed (project-scoped) | Bronze warehouse bucket | Read / managed Iceberg storage access |
 | `<domain>-data-owners` group | Google Group | Own domain's bronze, silver, gold | Read; PR approval via `CODEOWNERS` |
-| `analysts` group / other domains | Google Group / view authorization | `gold_*` datasets | Read data products only |
+| `analysts` group / other domains | Google Group / authorized views | `gold_*` datasets only | Read curated data products only |
 
 ### 5.6 Architecture Decision Register
 
-| ID | Decision | Verify In |
-| :--- | :--- | :--- |
-| `ADR-01` | Data mesh by business-function domain, with domains isolated inside the shared env project | `06`, `08` |
-| `ADR-02` | Separate `infra/lakehouse` stack with its own tag namespace | `06` |
-| `ADR-03` | Silver and gold as BigQuery views; gold is the data product interface | `12` |
-| `ADR-04` | Catalog provisioned by OpenTofu; namespaces and tables managed by `sdk-lakehouse`; logical catalog name `bronze` in every env | `07`, `09` |
-| `ADR-05` | Streaming bronze as BigQuery-managed Iceberg (opt-in) | `11` |
-| `ADR-06` | Generated `raw__` views instead of granting analysts bronze access | `12` |
-| `ADR-07` | To confirm: BigQuery references to REST-catalog tables, authorized views over them, namespace-scoped catalog IAM, and Pub/Sub subscriptions writing to Iceberg | `07`, `08`, `11` |
+| ID | Decision | Rationale / Scope | Verify In |
+| :--- | :--- | :--- | :--- |
+| `ADR-01` | Data mesh by business-function domain with strictly project-level IAM inside each env project | Clean domain isolation without org/folder IAM sprawl; project-per-domain deferred | `06`, `08` |
+| `ADR-02` | Separate `infra/lakehouse` stack with its own state prefix and `udp-lakehouse-v*` tag namespace | Isolates data-bearing infra from `infra/platform` blast radius | `06` |
+| `ADR-03` | View-first Silver & Gold in BigQuery on Day 1; `REQ-10` materialization escape hatch | `$0` idle compute and fast iteration; multi-engine physical Iceberg Silver/Gold deferred as a future enhancement | `12` |
+| `ADR-04` | 3-stage pipeline: OpenTofu (catalog/infra) → `sdk-lakehouse` (namespaces/tables via BigLake REST) → View deploy (Mini-Spec `12`) | Zero circular dependency; `sdk-lakehouse` never owns catalog lifecycle; logical catalog `bronze` stays env-agnostic | `07`, `09`, `12` |
+| `ADR-05` | Unified GCP-managed Iceberg for Bronze (interfaced via BigLake REST endpoints); streaming opt-in via `enable_streaming` | Avoids operating two divergent Iceberg engines or self-managed Spark compaction | `07`, `11` |
+| `ADR-06` | Defer raw passthrough (`raw__`) views from gold | Preserves analyst isolation and avoids exposing unmasked raw/PII bronze columns before policy tags exist | Future |
+| `ADR-07` | Spike required before build: BigQuery authorized views over BigLake REST catalog tables, namespace-scoped catalog IAM, and direct Pub/Sub → managed Iceberg delivery (fallback: Storage Write API / Cloud Run writer) | Depends on current GCP BigLake/Pub/Sub feature parity | `07`, `08`, `11` |
 
 ### 5.7 Mini-Spec Roadmap
 
 | Spec | Title | Delivers |
 | :--- | :--- | :--- |
-| `06` | Lakehouse stack & domain onboarding scaffold | Stack, state, `udp-lakehouse-v*` tags, CI routing, `domain.yaml` → per-domain resources |
-| `07` | Bronze storage & BigLake catalog provisioning | Buckets, REST catalog, BigQuery connection, lifecycle |
-| `08` | Lakehouse IAM & domain access model | §5.5 principals, authorized views |
-| `09` | Bronze namespace & table deployment | `sdk-lakehouse` CI job (needs the SDK graduated and published) |
-| `10` | Batch ingestion framework | Cloud Run job contract, landing, quarantine, Scheduler |
-| `11` | Streaming ingestion (opt-in) | Pub/Sub schemas, DLQ, BigQuery-managed Iceberg tables |
-| `12` | View-as-code, raw views & governance checks | Silver/gold deploy, `raw__` generation, `REQ-14` CI policies, `REQ-10` register |
-| `13` | Maintenance, observability & alerting | Maintenance jobs, alerts, per-domain cost views |
+| `06` | Lakehouse stack & domain onboarding scaffold | `infra/lakehouse` Terragrunt stack, state prefix, `udp-lakehouse-v*` tags, CI routing, `domain.yaml` → project-level domain resources |
+| `07` | Bronze storage & BigLake managed Iceberg catalog | Landing/bronze buckets, OpenTofu-managed BigLake REST catalog, BQ connection, lifecycle rules |
+| `08` | Project-level Lakehouse IAM & domain access | §5.5 project-level principals, domain isolation, authorized-view wiring |
+| `09` | Bronze namespace & table deployment (`sdk-lakehouse`) | Stage 2 CI job applying domain `table.yaml`/`table.proto` via BigLake REST endpoints + backward-compatibility check |
+| `10` | Batch ingestion framework | Cloud Run job contract, landing layout, quarantine, Cloud Scheduler triggers |
+| `11` | Streaming ingestion (opt-in) | Pub/Sub schemas, DLQ, managed Iceberg streaming delivery (`enable_streaming`) |
+| `12` | Bronze → Silver → Gold view deployment & governance | Stage 3 deployment tool choice (e.g., Dataform/dbt/DDL runner), Silver/Gold views from shared table metadata, `REQ-13` CI checks, `REQ-10` register |
+| `13` | Data quality, observability & alerting | Managed-Iceberg retention checks, runtime DQ assertions, alert policies, per-domain cost views |
 
 ---
 
 ## 6. Invariants, Edge Cases & Failure Modes
 
 ### Key Invariants
-1. **Domain Sovereignty:** A domain's silver and bronze are never read outside the domain, except through the platform-generated `raw__` views in its own gold.
+1. **Domain Sovereignty:** A domain's bronze and silver are never read outside the domain; `gold_<domain>` is its sole published interface.
 2. **Zero Idle Compute by Default:** With `enable_streaming = false`, no always-on compute exists.
-3. **One Entity → One Silver View → One Raw View**, and curated gold never reads bronze.
-4. **Replayable & Env-Agnostic:** Landing objects are immutable within retention, and domain definitions never contain project IDs, bucket names or env names.
+3. **Strict Layering & 3-Stage Ordering:** Curated gold never reads bronze directly; CI always executes Stage 1 (OpenTofu infra) → Stage 2 (`sdk-lakehouse` Bronze DDL) → Stage 3 (Silver/Gold view deploy).
+4. **Replayable, Project-Scoped & Env-Agnostic:** Landing objects are immutable within retention, all IAM is project-level, and domain definitions never contain project IDs, bucket names, or env names.
 
 ### Failure Mode Matrix
 
 | Failure Condition | Expected Behavior |
 | :--- | :--- |
 | Domain folder without `domain.yaml` or `CODEOWNERS` | CI fails; nothing is provisioned |
-| A view reads another domain's silver or bronze, breaks the naming grammar, or has undeclared sources | CI fails on the PR (`REQ-14`) |
-| Malformed batch record / invalid streaming message | Quarantine or DLQ; valid rows commit; `domain`-labeled alert |
-| Duplicate or late events | Bronze and `raw__` keep every row; silver keeps the latest per `_event_key` |
-| Bronze table removed from YAML | Its `raw__` view is removed in the same apply; plan flags dependent views |
-| Manual DDL in `uat`/`prod` | Detected as drift by the next plan and reverted |
+| View reads bronze directly, reads another domain's silver/bronze, breaks naming/label limits, or has undeclared sources | CI fails on the PR (`REQ-13`) |
+| Breaking schema change (column drop / type narrowing) in `table.yaml` / `table.proto` without override | Stage 2 CI check fails on the PR (`REQ-13`) |
+| Malformed batch record / invalid streaming message | Routed to `_quarantine/<domain>/` or DLQ; valid rows commit; `domain`-labeled alert fires |
+| Duplicate or late events | Bronze appends every row; silver keeps latest per `_event_key` |
+| Silver or gold view exceeds scan-cost/latency threshold | Recorded in `materializations.yaml` and incrementally materialized under the same name (`REQ-10`) |
+| Manual DDL in `uat`/`prod` | Detected as drift on next CI run and reverted (`REQ-08`) |
 
 ---
 
@@ -222,18 +221,17 @@ Every silver and curated gold view has a YAML sidecar (`description`, `grain`, `
 
 | Case ID | Scenario | Expected Outcome |
 | :--- | :--- | :--- |
-| `TC-001` | Change only `infra/lakehouse/**`; promote `udp-lakehouse-v0.1.0` | Only the lakehouse stack plans/applies for `dev`; `uat` pins the tag; platform state is untouched (`06`) |
-| `TC-002` | Add `lakehouse/domains/finance/domain.yaml` + `CODEOWNERS` | Namespace, `silver_finance`, `gold_finance`, `sa-ingest-finance` and owner IAM are created with no infra code written (`06`) |
-| `TC-003` | Apply `dev` | Every §5.2 resource exists with the required names, labels, UBLA and public access prevention; the catalog exists before any `sdk-lakehouse` run (`07`) |
-| `TC-004` | `enable_streaming = false` | No always-on compute; no `bronze_stream` resources (`07`, `11`) |
-| `TC-005` | Impersonate `sa-ingest-football` | Can append to `bronze.football`; writing to `finance`, running DDL or creating a catalog is denied (`08`) |
-| `TC-006` | Query as `analysts` and as `finance-data-owners` | `gold_*` succeeds; `silver_football`/`bronze.football` are denied (`08`, `12`) |
-| `TC-007` | Merge `football` table YAML | CI creates the table in the existing catalog; re-running is a no-op (`09`) |
-| `TC-008` | Run the `football` ingestion job | Payload lands under the `REQ-03` path; rows carry all §5.3 columns (`10`) |
-| `TC-009` | Batch with a malformed record | Quarantined; valid rows commit; `domain`-labeled alert (`10`, `13`) |
-| `TC-010` | `enable_streaming = true`; publish valid + invalid events | Valid row is queryable in `bronze_stream`; invalid one reaches the DLQ (`11`) |
-| `TC-011` | Same `_event_key` ingested twice | `silver_football.matches` returns 1 row; `raw__matches` returns 2 (`12`) |
-| `TC-012` | Add, then remove, a bronze table | `raw__<entity>` appears and disappears in the same apply (`12`) |
-| `TC-013` | PR: a `finance` gold view reads `silver_football`, has a bad name, or has undeclared sources | CI fails; a compliant view reading `gold_football` deploys with `domain`/`src_<entity>` labels (`12`) |
-| `TC-014` | Filter `TABLE_OPTIONS` by `src_matches` | Returns every view built on `matches`, across domains (`12`) |
-| `TC-015` | Run maintenance; force an ingestion failure | Snapshots expired and orphans removed; alert reaches the Spec 03 channel (`13`) |
+| `TC-001` | Change only `infra/lakehouse/**`; promote `udp-lakehouse-v0.1.0` | Only lakehouse stack plans/applies for `dev`; `uat` pins tag; `infra/platform` state untouched (`06`) |
+| `TC-002` | Add `lakehouse/domains/finance/domain.yaml` + `CODEOWNERS` | `silver_finance`, `gold_finance`, `sa-ingest-finance`, and project-level owner IAM provision with zero domain HCL (`06`) |
+| `TC-003` | Apply Stage 1 (`infra/lakehouse`) in `dev` | All §5.2 resources exist with required names, labels, UBLA, and PAP; managed Iceberg catalog `bronze` exists before Stage 2 (`07`) |
+| `TC-004` | `enable_streaming = false` | Zero always-on compute and zero Pub/Sub/streaming resources (`07`, `11`) |
+| `TC-005` | Impersonate `sa-ingest-football` and `sa-lakehouse-ddl` | `sa-ingest-football` appends only to `bronze.football` (cannot write `finance` or run DDL); `sa-lakehouse-ddl` manages namespaces/tables but cannot create/delete catalogs; zero folder/org IAM (`08`) |
+| `TC-006` | Query as `analysts` and as `finance-data-owners` | `gold_*` queries succeed; direct `silver_football` and `bronze.football` queries are denied (`08`, `12`) |
+| `TC-007` | Merge `football` `table.yaml` / `table.proto` | Stage 2 (`sdk-lakehouse`) creates namespace + table in existing managed Iceberg `bronze` catalog via REST endpoints; re-run is a no-op; breaking column drop fails CI (`09`) |
+| `TC-008` | Run `football` batch ingestion job | Raw payload lands under `REQ-03` path; bronze rows carry all §5.3 metadata columns (`10`) |
+| `TC-009` | Batch contains a malformed record | Bad record written to `landing/_quarantine/football/`; valid rows commit; `domain`-labeled alert fires (`10`, `13`) |
+| `TC-010` | `enable_streaming = true`; publish valid + invalid events | Valid event lands in managed Iceberg `bronze`; invalid event routes to DLQ (`11`) |
+| `TC-011` | Same `_event_key` ingested twice | Bronze retains both rows; `silver_football.matches` returns 1 row (latest `_ingested_at`) (`12`) |
+| `TC-012` | PR: `finance` gold view reads bronze directly, reads `silver_football`, breaks naming, or has undeclared sources | CI fails; compliant view reading `gold_football` deploys with `domain` and `src_<domain>__<entity>` labels (`12`) |
+| `TC-013` | Filter `INFORMATION_SCHEMA.TABLE_OPTIONS` by `src_football__matches` | Returns every silver and gold view built on `football.matches` across domains without cross-domain label collisions (`12`) |
+| `TC-014` | Force ingestion failure, DLQ backlog, or Silver uniqueness DQ violation | Alert reaches Spec 03 notification channel with `domain` label (`13`) |

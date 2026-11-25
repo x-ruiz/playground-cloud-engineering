@@ -5,7 +5,7 @@
 - **Archetype:** Infrastructure-as-Code Contract (DRY Multi-Environment Composition & Immutable Release Tagging)
 - **Tier:** Full Spec
 - **Owner:** Xavier Ruiz
-- **Depends On:** `specs/01_gcp_bootstrap_and_wif.md`
+- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap) *(graduated from `specs/01_gcp_bootstrap_and_wif.md`)*
 - **Companion Spec:** `specs/04_github_actions_cicd.md` (Trunk-Based GitOps CI/CD & Tag Promotion)
 - **Supersedes:** `specs/02_gcp_core_modules.md` (removes local `infra/modules/` in favor of tag-pinned public GitHub modules)
 
@@ -85,10 +85,9 @@ Leveraging OpenTofu 1.8+ **Early Variable & Local Evaluation** in `module.source
 ```text
 platform_unified_data_gcp/
 ├── scripts/
-│   ├── bootstrap_init.sh
-│   └── test_bootstrap_init.sh
+│   ├── detect_affected_envs.sh       # Spec 04 path-scoped CI change detection
+│   └── test_detect_affected_envs.sh  # Offline unit tests for change detection
 └── infra/
-    ├── bootstrap/                    # Spec 01 (plain OpenTofu, one-time)
     ├── platform/                     # Single OpenTofu platform module (tagged atomically as udp-gcp-vX.Y.Z)
     │   ├── module-versions.yaml      # Single source of truth for upstream module tags (read via OpenTofu Early Eval)
     │   ├── versions.tf

@@ -1,7 +1,7 @@
 # Feature Spec: GCP Org Bootstrap, KMS State & Keyless WIF
 
-- **Status:** Approved
-- **Module / Component:** `platform_unified_data_gcp/infra/bootstrap` + `scripts/bootstrap_init.sh` (OpenTofu `>= 1.8`, `hashicorp/google ~> 6.0`, `integrations/github ~> 6.0`)
+- **Status:** Graduated (to **[x-ruiz/platform_gcp_org_bootstrap](https://github.com/x-ruiz/platform_gcp_org_bootstrap)** — generalized multi-folder Org bootstrap, Organization Policies, and 7 org-owned GitHub Actions variables; `infra/bootstrap/` and `scripts/bootstrap_init.sh` were pruned from this repository)
+- **Module / Component:** Originally `platform_unified_data_gcp/infra/bootstrap` + `scripts/bootstrap_init.sh` (now standalone `x-ruiz/platform_gcp_org_bootstrap`)
 - **Archetype:** Infrastructure-as-Code & GitOps Contract (One-Time Bootstrap)
 - **Tier:** Full Spec
 - **Owner:** Xavier Ruiz
