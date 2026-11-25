@@ -1,0 +1,16 @@
+# Single source of truth for upstream public GitHub OpenTofu module repositories & release tags.
+# Read natively by infra/platform/main.tf via yamldecode(file("${path.module}/module-versions.yaml"))
+# and interpolated into module.source through OpenTofu 1.8+ Early Evaluation.
+#
+# Because this file lives inside infra/platform/, every udp-gcp-vX.Y.Z Git tag freezes the
+# platform HCL and these upstream versions together as one immutable release unit.
+# Floating refs (main/master) are forbidden: every version must match ^v[0-9]+\.[0-9]+\.[0-9]+$.
+
+modules:
+  cloud-foundation-fabric:
+    repository: "https://github.com/GoogleCloudPlatform/cloud-foundation-fabric.git"
+    version: "v60.0.0"
+
+  terraform-google-project-factory:
+    repository: "https://github.com/terraform-google-modules/terraform-google-project-factory.git"
+    version: "v18.4.0"

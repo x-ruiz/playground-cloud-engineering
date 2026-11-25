@@ -1,6 +1,6 @@
 # Feature Spec: GitHub Actions GitOps CI/CD & Tag-Based Environment Promotion (`udp-gcp-*`)
 
-- **Status:** Draft (Redesign — Pending Approval)
+- **Status:** Approved
 - **Module / Component:** `<repo-root>/.github/workflows/udp-gcp-pr-check.yml`, `<repo-root>/.github/workflows/udp-gcp-apply.yml`, `<repo-root>/.github/workflows/udp-gcp-promote.yml` (GitHub Actions + GCP WIF + OpenTofu + Terragrunt)
 - **Archetype:** CI/CD & Trunk-Based GitOps Promotion Contract
 - **Tier:** Full Spec
@@ -196,7 +196,7 @@ sequenceDiagram
 ## 4. Functional Requirements
 
 - `REQ-01`: **Path-Scoped Triggers & Least-Privilege Permissions** — All three workflows shall live at `<repo-root>/.github/workflows/`, declare top-level `permissions: {}` with minimal job-level permissions, and scope triggers strictly to `platform_unified_data_gcp/**` and `.github/workflows/udp-gcp-*.yml`.
-- `REQ-02`: **Pinned CI Tooling, OpenTofu Binding & Private Tag Fetch** — All workflows shall pin explicit versions of OpenTofu, Terragrunt, TFLint, and Trivy Action, export `TG_TF_PATH=tofu`, and configure ephemeral Git credentials (`url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf`) whenever Terragrunt fetches tagged `infra/platform` refs from the private repository.
+- `REQ-02`: **Pinned CI Tooling, OpenTofu Binding & Private Tag Fetch** — All workflows shall pin explicit versions of OpenTofu, Terragrunt, TFLint, and Trivy Action, export `TG_TF_PATH=tofu`, and configure ephemeral Git credentials scoped strictly to this repository (`"url.https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.insteadOf" "https://github.com/${GITHUB_REPOSITORY}"`) whenever Terragrunt fetches tagged `infra/platform` refs from the private repository, so public third-party modules (`cloud-foundation-fabric`, `terraform-google-project-factory`) still clone anonymously over HTTPS.
 - `REQ-03`: **Deterministic Change Detection (`detect-changes`)** — Both `udp-gcp-pr-check.yml` and `udp-gcp-apply.yml` shall compute affected environments strictly from changed paths:
   - `infra/platform/**` → `dev` only
   - `infra/envs/dev/**` → `dev` only
@@ -248,7 +248,8 @@ platform_version: "unreleased"
 | `infra/envs/uat/**` (incl. `uat/release.yaml`) | Skip | Run | Skip | UAT promotion PR or UAT-only config edit. |
 | `infra/envs/prod/**` (incl. `prod/release.yaml`) | Skip | Skip | Run | Prod promotion PR, rollback PR, or Prod-only config edit. |
 | `infra/envs/root.hcl` | Run | Run | Run | Shared root backend/provider/encryption changes apply in `dev` → `uat` → `prod` order. |
-| `infra/bootstrap/**`, `scripts/**`, `specs/**`, `README.md` | Skip | Skip | Skip | `static-checks` still runs on PR; zero env plans or applies triggered. |
+| `.github/workflows/udp-gcp-{pr-check,apply}.yml` | Run | Skip | Skip | Exercises CI/CD pipeline changes safely against `dev` only (`udp-gcp-promote.yml` skips GCP plans). |
+| `infra/bootstrap/**`, `scripts/**`, `specs/**`, `README.md`, `udp-gcp-promote.yml` | Skip | Skip | Skip | `static-checks` still runs on PR; zero env plans or applies triggered. |
 
 ### 5.4 Consumed GitHub Actions Variables & Optional Secrets
 
@@ -292,7 +293,7 @@ To keep promotions simple, linear, and safe without cherry-pick branches or mult
 | :--- | :--- | :--- |
 | `udp-gcp-promote.yml` triggered from a non-`main` branch | Workflow fails immediately at branch guard (`github.ref != 'refs/heads/main'`) | Prevents cutting release tags from unreviewed feature branches. |
 | `uat-to-prod` triggered while `uat/release.yaml` is `"unreleased"` or equals `prod/release.yaml` | Workflow exits non-zero with clear message; no PR opened | Enforces `dev` → `uat` → `prod` promotion order and prevents empty no-op PRs. |
-| `dev-to-uat` triggered twice on the same `main` HEAD commit | Reuses existing `udp-gcp-vX.Y.Z` tag on HEAD; updates/reuses open promotion branch | Prevents duplicate semver tags pointing to identical commits. |
+| `dev-to-uat` triggered when `main` HEAD is already tagged OR zero files under `infra/platform/**` changed since the latest tag | Reuses existing `udp-gcp-vX.Y.Z` tag (if `uat` already pins it, exits non-zero with no PR) | Prevents duplicate or empty no-op semver tags after merging Promotion PRs or doc commits. |
 | `UDP_GCP_PROMOTE_TOKEN` secret is not configured | Promotion PR is still created via `GITHUB_TOKEN`, with a banner noting that GitHub's anti-recursion rule requires closing/reopening or pushing a commit (or adding `UDP_GCP_PROMOTE_TOKEN`) to auto-fire `udp-gcp-pr-check.yml` | Explicit, transparent handling of GitHub Actions' `GITHUB_TOKEN` PR-event limitation. |
 | PR touches `infra/envs/uat/terragrunt.hcl` while `uat/release.yaml` is `"unreleased"` | `static-checks` runs; `plan (uat)` is skipped with clear log note | Prevents attempting to `git clone ?ref=unreleased` on Day 0. |
 | Pinned tag in `release.yaml` does not exist in Git | `terragrunt init` fails during PR plan before merge | Blocks broken tag typos from ever reaching `main`. |

@@ -1,9 +1,17 @@
 include "root" {
-  path = find_in_parent_folders("root.hcl")
+  path   = find_in_parent_folders("root.hcl")
+  expose = true
 }
 
+locals {
+  # Immutable platform release pin, managed by .github/workflows/udp-gcp-promote.yml.
+  platform_version = yamldecode(file("${get_terragrunt_dir()}/release.yaml")).platform_version
+}
+
+# prod is isolated from main HEAD: it only ever deploys the tagged infra/platform release
+# pinned in release.yaml. The local relative path is used solely for offline validate/tests.
 terraform {
-  source = "../../platform//."
+  source = include.root.locals.offline_test ? "../../platform//." : "${include.root.locals.platform_git_source}?ref=${local.platform_version}"
 }
 
 inputs = {

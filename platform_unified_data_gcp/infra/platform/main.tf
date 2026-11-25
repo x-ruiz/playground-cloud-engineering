@@ -1,4 +1,12 @@
 locals {
+  # Upstream module repositories & release tags (OpenTofu 1.8+ Early Evaluation in module.source).
+  # Sourced from module-versions.yaml so they freeze atomically inside each udp-gcp-vX.Y.Z tag.
+  module_versions         = yamldecode(file("${path.module}/module-versions.yaml")).modules
+  cff_repository          = local.module_versions["cloud-foundation-fabric"].repository
+  cff_version             = local.module_versions["cloud-foundation-fabric"].version
+  project_factory_repo    = local.module_versions["terraform-google-project-factory"].repository
+  project_factory_version = local.module_versions["terraform-google-project-factory"].version
+
   normalized_parent = startswith(var.platform_folder_id, "folders/") ? var.platform_folder_id : "folders/${var.platform_folder_id}"
 
   mandatory_labels = {
@@ -26,7 +34,7 @@ resource "random_id" "project_suffix" {
 }
 
 module "project" {
-  source = "git::https://github.com/GoogleCloudPlatform/cloud-foundation-fabric.git//modules/project?ref=${var.cff_version}"
+  source = "git::${local.cff_repository}//modules/project?ref=${local.cff_version}"
 
   name                = "${var.project_id}-${random_id.project_suffix.hex}"
   descriptive_name    = var.project_name
@@ -44,7 +52,7 @@ module "project" {
 }
 
 module "vpc" {
-  source = "git::https://github.com/GoogleCloudPlatform/cloud-foundation-fabric.git//modules/net-vpc?ref=${var.cff_version}"
+  source = "git::${local.cff_repository}//modules/net-vpc?ref=${local.cff_version}"
 
   project_id              = module.project.project_id
   name                    = local.vpc_name
@@ -69,7 +77,7 @@ module "vpc" {
 }
 
 module "firewall" {
-  source = "git::https://github.com/GoogleCloudPlatform/cloud-foundation-fabric.git//modules/net-vpc-firewall?ref=${var.cff_version}"
+  source = "git::${local.cff_repository}//modules/net-vpc-firewall?ref=${local.cff_version}"
 
   project_id = module.project.project_id
   network    = module.vpc.name
@@ -118,7 +126,7 @@ module "firewall" {
 }
 
 module "cloud_nat" {
-  source = "git::https://github.com/GoogleCloudPlatform/cloud-foundation-fabric.git//modules/net-cloudnat?ref=${var.cff_version}"
+  source = "git::${local.cff_repository}//modules/net-cloudnat?ref=${local.cff_version}"
   count  = var.enable_cloud_nat ? 1 : 0
 
   project_id     = module.project.project_id
@@ -144,7 +152,7 @@ resource "google_monitoring_notification_channel" "budget_email" {
 }
 
 module "budget" {
-  source = "git::https://github.com/terraform-google-modules/terraform-google-project-factory.git//modules/budget?ref=${var.project_factory_version}"
+  source = "git::${local.project_factory_repo}//modules/budget?ref=${local.project_factory_version}"
 
   billing_account      = var.billing_account_id
   projects             = [module.project.project_id]
