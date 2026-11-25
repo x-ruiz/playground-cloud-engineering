@@ -5,6 +5,7 @@
 **/.terraform/
 **/.tofu/
 **/.terragrunt-cache/
+**/infra/envs/**/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan

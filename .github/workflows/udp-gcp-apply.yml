@@ -58,7 +58,7 @@ jobs:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
       - name: Setup Terragrunt
-        uses: gruntwork-io/terragrunt-action@v3
+        uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
           tg_command: "--version"
@@ -98,7 +98,7 @@ jobs:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
       - name: Setup Terragrunt
-        uses: gruntwork-io/terragrunt-action@v3
+        uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
           tg_command: "--version"
@@ -138,7 +138,7 @@ jobs:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
       - name: Setup Terragrunt
-        uses: gruntwork-io/terragrunt-action@v3
+        uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
           tg_command: "--version"

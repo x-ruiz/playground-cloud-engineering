@@ -31,7 +31,7 @@ jobs:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
       - name: Setup Terragrunt
-        uses: gruntwork-io/terragrunt-action@v3
+        uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
           tg_command: "--version"
@@ -113,7 +113,7 @@ jobs:
           tflint --recursive --config="$(pwd)/.tflint.hcl" --chdir=infra
 
       - name: Run Trivy IaC security scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "config"
           scan-ref: "${{ env.PROJECT_DIR }}/infra"
@@ -167,7 +167,7 @@ jobs:
           tofu_version: ${{ env.OPENTOFU_VERSION }}
 
       - name: Setup Terragrunt
-        uses: gruntwork-io/terragrunt-action@v3
+        uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
           tg_command: "--version"
