@@ -61,6 +61,7 @@ jobs:
         uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tf_path: tofu
           tg_command: "--version"
 
       - name: Authenticate to GCP via WIF (Apply SA — main only)
@@ -101,6 +102,7 @@ jobs:
         uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tf_path: tofu
           tg_command: "--version"
 
       - name: Authenticate to GCP via WIF (Apply SA — main only)
@@ -141,6 +143,7 @@ jobs:
         uses: gruntwork-io/terragrunt-action@v3.4.1
         with:
           tg_version: ${{ env.TERRAGRUNT_VERSION }}
+          tf_path: tofu
           tg_command: "--version"
 
       - name: Authenticate to GCP via WIF (Apply SA — main only)
