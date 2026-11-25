@@ -81,7 +81,7 @@ Before any continuous GitOps environment (`envs/dev`) or reusable GCP modules ca
 | :--- | :--- | :--- | :--- | :--- |
 | `sa-tofu-plan` | `assertion.repository == var.github_repository` | Platform Folder | `roles/viewer`, `roles/iam.securityReviewer` | Read-only PR plan & drift detection. |
 | `sa-tofu-plan` | Same | Seed State Bucket | `roles/storage.objectViewer` | Read-only state access (`-lock=false`). |
-| `sa-tofu-plan` | Same | Seed KMS Key | `roles/cloudkms.cryptoKeyDecrypter` | Decrypt state on PR plan (cannot write). |
+| `sa-tofu-plan` | Same | Seed KMS Key | `roles/cloudkms.cryptoKeyEncrypterDecrypter` | Initialize OpenTofu `gcp_kms` provider & decrypt state on PR plan (cannot write GCS state due to `objectViewer`). |
 | `sa-tofu-apply` | `assertion.repository == var.github_repository && assertion.ref == "refs/heads/main"` | Platform Folder | `projectCreator`, `projectDeleter`, `projectIamAdmin`, `compute.networkAdmin`, `serviceUsageAdmin`, `monitoring.notificationChannelEditor` | Manage environment projects, VPCs, APIs, and alerts under Platform Folder only. |
 | `sa-tofu-apply` | Same | Billing Account | `roles/billing.user`, `roles/billing.costsManager` | Link environment projects & manage budgets. |
 | `sa-tofu-apply` | Same | Seed State Bucket | `roles/storage.objectUser` | Read/write state and `.tflock` files. |

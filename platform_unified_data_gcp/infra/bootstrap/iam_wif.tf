@@ -98,9 +98,11 @@ resource "google_storage_bucket_iam_member" "plan_state_viewer" {
   member = "serviceAccount:${google_service_account.tofu_plan.email}"
 }
 
+# OpenTofu's gcp_kms key_provider wraps a fresh data key during init even on read-only plan.
+# sa-tofu-plan remains strictly read-only via roles/storage.objectViewer (GCS) and roles/viewer (Folder).
 resource "google_kms_crypto_key_iam_member" "plan_kms_decrypter" {
   crypto_key_id = google_kms_crypto_key.state.id
-  role          = "roles/cloudkms.cryptoKeyDecrypter"
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${google_service_account.tofu_plan.email}"
 }
 

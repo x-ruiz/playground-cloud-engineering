@@ -81,8 +81,8 @@ run "bootstrap_hardening_and_wif_invariants" {
   }
 
   assert {
-    condition     = google_storage_bucket_iam_member.plan_state_viewer.role == "roles/storage.objectViewer" && google_kms_crypto_key_iam_member.plan_kms_decrypter.role == "roles/cloudkms.cryptoKeyDecrypter"
-    error_message = "sa-tofu-plan must have read-only storage and KMS decrypt-only permissions."
+    condition     = google_storage_bucket_iam_member.plan_state_viewer.role == "roles/storage.objectViewer" && google_kms_crypto_key_iam_member.plan_kms_decrypter.role == "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+    error_message = "sa-tofu-plan must have read-only GCS objectViewer and KMS encrypter/decrypter (required by OpenTofu gcp_kms init)."
   }
 
   assert {
