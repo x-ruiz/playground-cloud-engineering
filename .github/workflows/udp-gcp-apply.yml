@@ -1,6 +1,6 @@
 name: UDP GCP — Directory-Scoped Apply
 
-# Spec 04 (Trunk-Based GitOps): on push to main, apply ONLY the environments affected by the
+# Spec 03 (Trunk-Based GitOps): on push to main, apply ONLY the environments affected by the
 # diff. infra/platform/** deploys dev only; uat/prod deploy only when their envs/<env>/** files
 # (e.g. a Promotion PR bumping release.yaml) change. root.hcl changes apply dev -> uat -> prod.
 

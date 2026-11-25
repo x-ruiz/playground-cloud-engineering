@@ -1,6 +1,6 @@
 name: UDP GCP — PR Check & Scoped Plan
 
-# Spec 04 (Trunk-Based GitOps): static checks always run; read-only plans run ONLY for the
+# Spec 03 (Trunk-Based GitOps): static checks always run; read-only plans run ONLY for the
 # environments affected by the diff (infra/platform/** -> dev; envs/<env>/** -> <env>;
 # envs/root.hcl -> dev + released envs). uat/prod plans fetch their immutable udp-gcp-vX.Y.Z tag.
 
@@ -90,7 +90,7 @@ jobs:
           terragrunt hcl fmt --check --working-dir "${PROJECT_DIR}/infra/envs"
 
           if [[ -d "${PROJECT_DIR}/infra/modules" ]]; then
-            echo "ERROR: Local infra/modules/ directory is forbidden by Spec 03." >&2
+            echo "ERROR: Local infra/modules/ directory is forbidden by Spec 02." >&2
             exit 1
           fi
 

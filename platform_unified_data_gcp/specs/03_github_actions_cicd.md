@@ -5,7 +5,7 @@
 - **Archetype:** CI/CD & Trunk-Based GitOps Promotion Contract
 - **Tier:** Full Spec
 - **Owner:** Xavier Ruiz
-- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap) *(graduated from `specs/01_gcp_bootstrap_and_wif.md`)*, `specs/03_platform_and_terragrunt_envs.md`
+- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap), `specs/02_platform_and_terragrunt_envs.md`
 
 ---
 
@@ -169,7 +169,7 @@ sequenceDiagram
 ## 3. Scope & Explicit Non-Goals
 
 ### In Scope
-- **Spec 03 Alignment (Companion Platform/Terragrunt Updates Required for Tagging):**
+- **Spec 02 Alignment (Companion Platform/Terragrunt Updates Required for Tagging):**
   - Move `infra/module-versions.yaml` → `infra/platform/module-versions.yaml`, read directly inside `infra/platform/` via OpenTofu 1.8+ Early Variable Evaluation (`yamldecode(file("${path.module}/module-versions.yaml"))`) so upstream CFF / Project Factory tags travel atomically inside each `udp-gcp-vX.Y.Z` Git tag.
   - Add machine-promoted `infra/envs/uat/release.yaml` and `infra/envs/prod/release.yaml` (`platform_version: "unreleased"` on Day 0, then `"udp-gcp-vX.Y.Z"` once promoted).
   - Keep `infra/envs/dev/terragrunt.hcl` on `source = "../../platform//."`; update `infra/envs/uat/terragrunt.hcl` and `infra/envs/prod/terragrunt.hcl` to resolve `terraform.source` to the tagged repo URL `${include.root.locals.platform_git_source}?ref=${local.platform_version}` (falling back to `../../platform//.` only under `UDP_GCP_OFFLINE_TEST=true`).
@@ -187,7 +187,7 @@ sequenceDiagram
 ### Non-Goals (Do Not Implement Yet — Future CI/CD Iterations)
 - **Long-lived environment Git branches (`uat`, `prod`)** — explicitly rejected to prevent merge-conflict drift and cross-project monorepo bleed.
 - **Copying `.tf` files across environment directories** — explicitly rejected to preserve DRY Terragrunt wrappers.
-- **Scheduled drift detection cron workflow** (future Spec 05+ enhancement).
+- **Scheduled drift detection cron workflow** (future Spec 04+ enhancement).
 - **Automated FinOps / Infracost PR comments** (future enhancement).
 - **Self-hosted runners, Atlantis, or HCP Terraform** (GitHub-hosted `ubuntu-latest` + WIF only).
 

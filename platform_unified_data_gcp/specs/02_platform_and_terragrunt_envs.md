@@ -5,9 +5,9 @@
 - **Archetype:** Infrastructure-as-Code Contract (DRY Multi-Environment Composition & Immutable Release Tagging)
 - **Tier:** Full Spec
 - **Owner:** Xavier Ruiz
-- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap) *(graduated from `specs/01_gcp_bootstrap_and_wif.md`)*
-- **Companion Spec:** `specs/04_github_actions_cicd.md` (Trunk-Based GitOps CI/CD & Tag Promotion)
-- **Supersedes:** `specs/02_gcp_core_modules.md` (removes local `infra/modules/` in favor of tag-pinned public GitHub modules)
+- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap)
+- **Companion Spec:** `specs/03_github_actions_cicd.md` (Trunk-Based GitOps CI/CD & Tag Promotion)
+- **Supersedes:** `specs/01_gcp_core_modules.md` (removes local `infra/modules/` in favor of tag-pinned public GitHub modules)
 
 ---
 
@@ -48,7 +48,7 @@ Leveraging OpenTofu 1.8+ **Early Variable & Local Evaluation** in `module.source
   - `infra/envs/uat/{terragrunt.hcl, release.yaml}` and `infra/envs/prod/{terragrunt.hcl, release.yaml}`: Pin immutable `platform_version` tags (`"unreleased"` on Day 0, `"udp-gcp-vX.Y.Z"` once promoted) and resolve `terraform.source` to `${include.root.locals.platform_git_source}?ref=${local.platform_version}` (falling back to `../../platform//.` only when `UDP_GCP_OFFLINE_TEST=true`).
 
 ### Non-Goals (Do Not Implement)
-- **No CI/CD workflow YAML:** GitHub Actions PR checks, path-scoped plans/applies, and the tag-promotion workflow live in `specs/04_github_actions_cicd.md`.
+- **No CI/CD workflow YAML:** GitHub Actions PR checks, path-scoped plans/applies, and the tag-promotion workflow live in `specs/03_github_actions_cicd.md`.
 - **No local `infra/modules/` directory, vendored upstream clones, or custom version-sync scripts.**
 - **No floating Git refs:** Never use `?ref=main`, `?ref=master`, or unpinned module URLs in `module-versions.yaml` or `release.yaml`.
 - **No duplicated per-environment `.tf` roots or OpenTofu CLI workspaces:** State isolation is strictly per-environment Terragrunt directory + GCS prefix.
@@ -85,7 +85,7 @@ Leveraging OpenTofu 1.8+ **Early Variable & Local Evaluation** in `module.source
 ```text
 platform_unified_data_gcp/
 ├── scripts/
-│   ├── detect_affected_envs.sh       # Spec 04 path-scoped CI change detection
+│   ├── detect_affected_envs.sh       # Spec 03 path-scoped CI change detection
 │   └── test_detect_affected_envs.sh  # Offline unit tests for change detection
 └── infra/
     ├── platform/                     # Single OpenTofu platform module (tagged atomically as udp-gcp-vX.Y.Z)
