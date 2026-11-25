@@ -159,13 +159,11 @@ jobs:
           ' "$env" "$UDP_GCP_PLATFORM_REPO"
           done
 
-      - name: Validate Bootstrap, Platform (OpenTofu) & Envs (Terragrunt offline)
+      - name: Validate Platform (OpenTofu) & Envs (Terragrunt offline)
         env:
           UDP_GCP_OFFLINE_TEST: "true"
         run: |
           set -euo pipefail
-          tofu -chdir="${PROJECT_DIR}/infra/bootstrap" init -backend=false -input=false
-          tofu -chdir="${PROJECT_DIR}/infra/bootstrap" validate
           tofu -chdir="${PROJECT_DIR}/infra/platform" init -backend=false -input=false
           tofu -chdir="${PROJECT_DIR}/infra/platform" validate
           for env in dev uat prod; do
@@ -195,13 +193,10 @@ jobs:
           skip-dirs: "**/.terraform,**/.terragrunt-cache"
           trivyignores: "${{ env.PROJECT_DIR }}/.trivyignore"
 
-      - name: Run script syntax & mocked unit tests (bootstrap preflight + change detection)
+      - name: Run script syntax & mocked unit tests (change detection)
         run: |
           set -euo pipefail
-          for script in bootstrap_init.sh detect_affected_envs.sh; do
-            bash -n "${PROJECT_DIR}/scripts/${script}"
-          done
-          bash "${PROJECT_DIR}/scripts/test_bootstrap_init.sh"
+          bash -n "${PROJECT_DIR}/scripts/detect_affected_envs.sh"
           bash "${PROJECT_DIR}/scripts/test_detect_affected_envs.sh"
 
       - name: Run OpenTofu & Terragrunt mocked unit tests
@@ -209,7 +204,6 @@ jobs:
           UDP_GCP_OFFLINE_TEST: "true"
         run: |
           set -euo pipefail
-          tofu -chdir="${PROJECT_DIR}/infra/bootstrap" test -verbose
           tofu -chdir="${PROJECT_DIR}/infra/platform" test -verbose
           terragrunt test --non-interactive --working-dir "${PROJECT_DIR}/infra/envs/dev" -verbose
 
