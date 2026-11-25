@@ -1,11 +1,11 @@
 # Feature Spec: Reusable GCP Core Modules (`project_factory`, `vpc_network`, `budget_guardrail`)
 
-- **Status:** Superseded (by `specs/03_platform_and_terragrunt_envs.md` — local `infra/modules/` removed in favor of tag-pinned public GitHub modules directly in `infra/platform/`)
+- **Status:** Superseded (by `specs/02_platform_and_terragrunt_envs.md` — local `infra/modules/` removed in favor of tag-pinned public GitHub modules directly in `infra/platform/`)
 - **Module / Component:** `platform_unified_data_gcp/infra/modules/*` (OpenTofu `>= 1.8`, `hashicorp/google ~> 6.0`, `hashicorp/random ~> 3.6`)
 - **Archetype:** Infrastructure-as-Code Contract (Reusable Modules)
 - **Tier:** Full Spec
 - **Owner:** Xavier Ruiz
-- **Depends On:** `specs/01_gcp_bootstrap_and_wif.md`
+- **Depends On:** External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap)
 
 ---
 
@@ -32,10 +32,10 @@ The shared platform composition (`infra/platform/`, consumed by Terragrunt envir
 - Strict OpenTofu `validation` blocks on all critical module inputs and offline `tests/*.tftest.hcl` suites using `mock_provider`.
 
 ### Non-Goals (Do Not Implement)
-- **No environment wrappers or CI workflows:** `infra/platform/`, Terragrunt `infra/envs/{dev,uat,prod}/`, and GitHub Actions pipelines live in Spec 03.
+- **No environment wrappers or CI workflows:** `infra/platform/`, Terragrunt `infra/envs/{dev,uat,prod}/`, and GitHub Actions pipelines live in Specs 02–03.
 - **No Shared VPC / peering / Cloud VPN:** Single-project isolated VPCs only.
 - **No data services:** No GCS medallion buckets, BigQuery datasets, BigLake catalogs, Dataproc, or Pub/Sub.
-- **No Terragrunt inside leaf modules:** `infra/modules/*` remain plain reusable OpenTofu HCL modules (Terragrunt wraps `infra/platform/` in Spec 03).
+- **No Terragrunt inside leaf modules:** `infra/modules/*` remain plain reusable OpenTofu HCL modules (Terragrunt wraps `infra/platform/` in Spec 02).
 
 ---
 
