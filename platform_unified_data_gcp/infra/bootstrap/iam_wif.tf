@@ -98,6 +98,20 @@ resource "google_storage_bucket_iam_member" "plan_state_viewer" {
   member = "serviceAccount:${google_service_account.tofu_plan.email}"
 }
 
+# Allow sa-tofu-plan to create/release .tflock lock objects during `tofu init` while
+# strictly blocking any write/delete on .tfstate objects.
+resource "google_storage_bucket_iam_member" "plan_state_lock" {
+  bucket = google_storage_bucket.state.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.tofu_plan.email}"
+
+  condition {
+    title       = "AllowTflockOnly"
+    description = "Permit lockfile creation/deletion (*.tflock) without granting write access to *.tfstate."
+    expression  = "resource.name.endsWith(\".tflock\")"
+  }
+}
+
 # OpenTofu's gcp_kms key_provider wraps a fresh data key during init even on read-only plan.
 # sa-tofu-plan remains strictly read-only via roles/storage.objectViewer (GCS) and roles/viewer (Folder).
 resource "google_kms_crypto_key_iam_member" "plan_kms_decrypter" {
