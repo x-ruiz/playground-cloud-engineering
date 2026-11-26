@@ -4,7 +4,7 @@
 | :--- | :--- |
 | **Status** | `Approved` |
 | **Owner** | Xavier Ruiz |
-| **Component** | `platform_unified_data_gcp/infra/{platform, envs}` |
+| **Component** | `platform_unified_data_gcp/infra/{platform, envs}` · repository layout for `infra/domains` and `lakehouse/` |
 | **Stack** | OpenTofu `>= 1.12.2` · Terragrunt `>= 0.72` · `google ~> 8.10` · CFF `v60.0.0` · Project Factory `v18.4.0` |
 | **Archetype / Tier** | Infrastructure-as-Code & GitOps · Full Spec (`7 REQs`, `7 TCs`) |
 | **Depends On** | External Org bootstrap [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap) |
@@ -90,13 +90,13 @@ flowchart TB
 - One `infra/platform/` module composing 5 tag-pinned upstream modules, with a multi-platform lockfile and offline mocked tests.
 - `infra/platform/module-versions.yaml` as the single source of upstream repository URLs and `vX.Y.Z` tags.
 - `infra/envs/root.hcl` plus thin `dev`/`uat`/`prod` wrappers with `release.yaml` pins for `uat` and `prod`.
-- The resource ownership model (§4.1) that every later stack must follow.
+- The resource ownership model (§4.1) and the repository layout and stack map (§4.3) that every later stack must follow.
 
 ### Out of Scope (Non-Goals)
 - **CI/CD workflow YAML:** PR checks, path-scoped plans/applies, and tag promotion live in [Spec 02](./02_github_actions_cicd.md).
 - **Local or vendored modules:** No `infra/modules/`, vendored upstream clones, or version-sync scripts.
 - **Floating Git refs:** Never `?ref=main`, `?ref=master`, or unpinned module URLs.
-- **Domain resources:** Per-domain buckets, datasets, and their IAM belong to domain stacks ([Spec 04](./04_bronze_storage_and_catalog.md) onward).
+- **Lakehouse resources:** The shared lakehouse platform extension is specified in [Spec 04](./04_lakehouse_platform_extension.md), and per-domain resources start in [Spec 05](./05_domain_bronze_layer.md).
 
 ---
 
@@ -116,7 +116,7 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 
 | ID | What | Why | How |
 | :--- | :--- | :--- | :--- |
-| `REQ-04` | DRY Terragrunt root | Removes duplicated backend, encryption, and provider blocks | `infra/envs/root.hcl` generates `backend.tf`, `encryption.tf`, and `provider.tf`, and exposes `platform_git_source` (§4.5) |
+| `REQ-04` | DRY Terragrunt root | Removes duplicated backend, encryption, and provider blocks | `infra/envs/root.hcl` generates `backend.tf`, `encryption.tf`, and `provider.tf`, and exposes `platform_git_source` (§4.6) |
 | `REQ-05` | Thin env wrappers & release pins | Isolates `uat`/`prod` from `main` HEAD while `dev` iterates | Zero `.tf` files in `infra/envs/`; `dev` tracks the local module; `uat`/`prod` resolve `release.yaml` (§4.6) |
 | `REQ-06` | Input validation & multi-platform lock | Fails fast on bad config and pins providers for macOS and Linux CI | Validation blocks per §4.4; `.terraform.lock.hcl` committed for `darwin_arm64` and `linux_amd64` |
 | `REQ-07` | Offline composition tests | Verifies wiring and cost/security invariants without credentials | `tests/platform_composition.tftest.hcl` with `mock_provider` and `expect_failures` |
@@ -154,21 +154,41 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 | **Cloud NAT** | CFF `//modules/net-cloudnat` | `v60.0.0` | Created only when `enable_cloud_nat = true` |
 | **Budget** | Project Factory `//modules/budget` + `google_monitoring_notification_channel` | `v18.4.0` | Monthly USD budget with `[0.5, 0.8, 1.0]` thresholds to `budget_alert_email` |
 
-### 4.3 Directory Layout
+### 4.3 Repository Layout & Stack Map
 
 ```text
-platform_unified_data_gcp/infra/
-├── platform/                         # Tagged as udp-gcp-vX.Y.Z
-│   ├── module-versions.yaml          # Upstream repos + vX.Y.Z tags
-│   ├── versions.tf · variables.tf · main.tf · outputs.tf
-│   ├── .terraform.lock.hcl           # darwin_arm64 + linux_amd64
-│   └── tests/platform_composition.tftest.hcl
-└── envs/                             # Zero .tf files
-    ├── root.hcl
-    ├── dev/terragrunt.hcl
-    ├── uat/{terragrunt.hcl, release.yaml}
-    └── prod/{terragrunt.hcl, release.yaml}
+platform_unified_data_gcp/
+├── infra/
+│   ├── platform/                         # Project-level & shared stack (tagged udp-gcp-vX.Y.Z)
+│   │   ├── module-versions.yaml          # Upstream repos + vX.Y.Z tags
+│   │   ├── versions.tf · variables.tf · main.tf · outputs.tf
+│   │   ├── .terraform.lock.hcl           # darwin_arm64 + linux_amd64
+│   │   └── tests/platform_composition.tftest.hcl
+│   ├── envs/                             # Platform wrappers (zero .tf files)
+│   │   ├── root.hcl
+│   │   ├── dev/terragrunt.hcl
+│   │   ├── uat/{terragrunt.hcl, release.yaml}
+│   │   └── prod/{terragrunt.hcl, release.yaml}
+│   └── domains/                          # Per-domain stack (tagged udp-domains-vX.Y.Z)
+│       ├── stack/                        # Same file set as infra/platform
+│       └── envs/                         # Own root.hcl + dev/uat/prod wrappers (zero .tf files)
+└── lakehouse/                            # Definitions only, no OpenTofu state
+    ├── schemas/                          # Manifest JSON Schemas (e.g., domain.schema.json)
+    └── domains/<domain>/                 # domain.yaml, table definitions, Silver/Gold views
 ```
+
+| Stack | Holds | State Prefix | Release Tag | `release.yaml` Key |
+| :--- | :--- | :--- | :--- | :--- |
+| `infra/platform` | Project-level & shared resources (§4.1) | `envs/<env>` | `udp-gcp-vX.Y.Z` | `platform_version` |
+| `infra/domains` | Per-domain resources from `lakehouse/domains/*/domain.yaml` | `envs/<env>/domains` | `udp-domains-vX.Y.Z` | `domains_version` |
+
+| Lakehouse Pipeline Stage (Spec 03) | Implemented By |
+| :--- | :--- |
+| Stage 1 · OpenTofu foundations | `infra/platform` (shared catalog, connection, APIs) and `infra/domains` (domain buckets) |
+| Stage 2 · Bronze namespaces & tables | `sdk-lakehouse` reading `lakehouse/domains/<domain>/` |
+| Stage 3 · Silver & Gold views | View deployer reading `lakehouse/domains/<domain>/` |
+
+Every stack follows the same conventions: a `stack/` (or `platform/`) module with `module-versions.yaml`, a lockfile and mocked tests; Terragrunt wrappers with zero `.tf` files; `dev` tracking the local module; and `uat`/`prod` pinning their own release tag.
 
 ### 4.4 Platform Inputs & Validation
 

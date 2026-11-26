@@ -4,7 +4,8 @@ OpenTofu + Terragrunt GCP foundation and GitOps platform governed by lifecycle-s
 - [Spec 01: Platform Module Setup & Ownership Model](./specs/01_platform_module_setup.md)
 - [Spec 02: GitHub Actions GitOps CI/CD & Tag-Based Environment Promotion](./specs/02_github_actions_cicd.md)
 - [Spec 03: GCP Data Lakehouse Reference Architecture](./specs/03_data_lakehouse_architecture.md) *(Draft)*
-- [Spec 04: Domain Manifest, Bronze Storage & BigLake Catalog](./specs/04_bronze_storage_and_catalog.md)
+- [Spec 04: Lakehouse Platform Extension (APIs, BigLake Catalog & BigQuery Connection)](./specs/04_lakehouse_platform_extension.md) *(Draft)*
+- [Spec 05: Domain Manifest & Bronze Storage Layer](./specs/05_domain_bronze_layer.md) *(Draft)*
 
 ## Architecture Overview
 
