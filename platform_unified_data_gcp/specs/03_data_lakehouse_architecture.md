@@ -324,8 +324,8 @@ All service accounts and bindings below are provisioned **strictly at the enviro
 | `sa-ingest-<domain>` | Cloud Run job identity | Own domain bucket (`raw/`, `quarantine/`) & `bronze.<domain>` tables | Write raw/quarantine; append Bronze rows; no DDL |
 | Pub/Sub / streaming writer SA | Project service agent / writer SA | `bronze` streaming tables (opt-in) | Append table data only |
 | `sa-lakehouse-ddl` | GitHub Actions Workload Identity Federation (WIF) (`main` for apply) | `bronze` namespaces/tables; `silver_*` & `gold_*` views | Namespace/table/view DDL; **no** catalog create/delete |
-| BigLake catalog SA | Google-managed (project-scoped) | Catalog root + domain buckets | `roles/storage.objectUser` for downscoped vended credentials |
-| BigQuery connection SA | Google-managed (project-scoped) | Catalog root + domain buckets | `roles/storage.objectViewer` read-only Iceberg access |
+| BigLake catalog SA | Google-managed (project-scoped) | Domain buckets | `roles/storage.objectUser` for downscoped vended credentials |
+| BigQuery connection SA | Google-managed (project-scoped) | Domain buckets | `roles/storage.objectViewer` read-only Iceberg access |
 | `<domain>-data-owners` group | Google Group | Own domain's bucket, bronze, silver, gold | Read; PR approval via `CODEOWNERS` |
 | `analysts` group / other domains | Google Group / authorized views | `gold_*` datasets only | Read curated data products only |
 

@@ -141,3 +141,60 @@ run "reject_zero_budget" {
 
   expect_failures = [var.monthly_budget_usd]
 }
+
+# Spec 04 TC-002: lakehouse APIs enabled on the environment project.
+run "lakehouse_apis_enabled" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for api in ["storage.googleapis.com", "biglake.googleapis.com", "bigquery.googleapis.com", "bigqueryconnection.googleapis.com"] :
+      contains(module.project.services, api)
+    ])
+    error_message = "Project must enable storage, biglake, bigquery, and bigqueryconnection APIs."
+  }
+}
+
+# Spec 04 TC-003: catalog root bucket naming, hardening, and labels.
+run "catalog_root_bucket_hardening" {
+  command = plan
+
+  assert {
+    condition     = module.catalog_root_bucket.name == "udp-dev-bronze-catalog-e5f6"
+    error_message = "Catalog root bucket must be named udp-<env>-bronze-catalog-<project suffix>."
+  }
+
+  assert {
+    condition = (
+      upper(module.catalog_root_bucket.bucket.location) == "US-CENTRAL1" &&
+      module.catalog_root_bucket.bucket.storage_class == "STANDARD" &&
+      module.catalog_root_bucket.bucket.uniform_bucket_level_access == true &&
+      module.catalog_root_bucket.bucket.public_access_prevention == "enforced" &&
+      module.catalog_root_bucket.bucket.versioning[0].enabled == true &&
+      module.catalog_root_bucket.bucket.soft_delete_policy[0].retention_duration_seconds == 604800 &&
+      module.catalog_root_bucket.bucket.force_destroy == false
+    )
+    error_message = "Catalog root bucket must be regional STANDARD with UBLA, enforced PAP, versioning, 7d soft delete, and force_destroy = false."
+  }
+
+  assert {
+    condition = (
+      module.catalog_root_bucket.bucket.labels["managed_by"] == "opentofu" &&
+      module.catalog_root_bucket.bucket.labels["environment"] == "dev" &&
+      module.catalog_root_bucket.bucket.labels["layer"] == "bronze" &&
+      module.catalog_root_bucket.bucket.labels["domain"] == "platform"
+    )
+    error_message = "Catalog root bucket must carry mandatory labels plus layer = bronze and domain = platform."
+  }
+}
+
+# Spec 04 TC-005 (partial): reject soft delete below 7 days.
+run "reject_soft_delete_below_minimum" {
+  command = plan
+
+  variables {
+    soft_delete_retention_seconds = 86400
+  }
+
+  expect_failures = [var.soft_delete_retention_seconds]
+}
