@@ -2,7 +2,7 @@
 
 | Field | Value |
 | :--- | :--- |
-| **Status** | `Draft (Pending Approval)` |
+| **Status** | `Approved` |
 | **Owner** | Xavier Ruiz |
 | **Component** | `platform_unified_data_gcp/infra/platform` (extension) |
 | **Stack** | OpenTofu `>= 1.12.2` · `google ~> 8.10` · CFF `v60.0.0` |
@@ -16,7 +16,7 @@
 ## 1. Overview & Design
 
 ### TL;DR
-Spec 03's Stage 1 needs shared lakehouse foundations before any domain can store Bronze data. Following the Spec 01 ownership model, this Mini-Spec adds them to `infra/platform`: the four lakehouse Application Programming Interfaces (APIs), a lightweight catalog root Google Cloud Storage (GCS) bucket, a multi-bucket BigLake Iceberg Representational State Transfer (REST) catalog (`bronze`, `CATALOG_TYPE_BIGLAKE`), and a regional BigQuery Cloud Resource connection. It exposes the catalog URIs and both Google-managed service accounts as platform outputs, adding `$0/mo` idle cost.
+Spec 03's Stage 1 needs shared lakehouse foundations before any domain can store Bronze data. Following the Spec 01 ownership model, this Mini-Spec adds them to `infra/platform`: the four lakehouse Application Programming Interfaces (APIs), a platform-owned catalog root Google Cloud Storage (GCS) bucket that serves only as the catalog's required default location, a multi-bucket BigLake Iceberg Representational State Transfer (REST) catalog (`bronze`, `CATALOG_TYPE_BIGLAKE`), and a regional BigQuery Cloud Resource connection. It exposes the catalog URIs and both Google-managed service accounts as platform outputs so Spec 05 can grant them access on each domain bucket, adding `$0/mo` idle cost.
 
 ### Architecture
 
@@ -25,7 +25,7 @@ Spec 03's Stage 1 needs shared lakehouse foundations before any domain can store
 flowchart TB
     subgraph Platform["infra/platform · Lakehouse Extension"]
         APIs["Project APIs\nstorage · biglake\nbigquery · bigqueryconnection"]
-        CatRoot[("Catalog Root Bucket\nudp-<env>-bronze-catalog-<suffix>\n$0 when empty")]
+        CatRoot[("Catalog Root Bucket\nudp-<env>-bronze-catalog-<suffix>\ndefault_location only · no data · no IAM")]
         Catalog["BigLake Iceberg REST Catalog\nbronze · CATALOG_TYPE_BIGLAKE\nVended Creds · PREVENT"]
         BQConn["BigQuery Cloud Connection\nudp-<env>-bronze-conn"]
     end
@@ -36,8 +36,7 @@ flowchart TB
     APIs ==>|"enabled first"| CatRoot
     APIs ==>|"enabled first"| Catalog
     APIs ==>|"enabled first"| BQConn
-    Catalog ==>|"default_location + objectUser"| CatRoot
-    BQConn -.->|"objectViewer"| CatRoot
+    Catalog ==>|"default_location"| CatRoot
     Platform -.->|"outputs: SAs · URIs"| Domains
     SDK ==>|"REST API"| Catalog
 
@@ -59,7 +58,7 @@ flowchart TB
 ### Key Design Decisions
 - **Platform-owned because shared:** The catalog, connection, and APIs would exist with zero domains, so Spec 01 §4.1 places them in `infra/platform` and they ride the `udp-gcp-vX.Y.Z` release train.
 - **Open BigLake Iceberg REST catalog:** `CATALOG_TYPE_BIGLAKE` keeps Bronze on the open Apache Iceberg REST protocol, supports many domain buckets under one logical `bronze` catalog, and mints downscoped GCS tokens via `CREDENTIAL_MODE_VENDED_CREDENTIALS`.
-- **Immutable catalog root:** A dedicated, `$0`-when-empty bucket is the catalog's `default_location`, so adding or removing domains never recreates the catalog.
+- **Catalog root is an anchor, not storage:** `CATALOG_TYPE_BIGLAKE` requires a `default_location` bucket URI. A dedicated platform bucket fills it so the catalog never depends on a domain and adding or removing domains never recreates it. It holds no data and has no IAM bindings: every namespace sets its own location in a domain bucket, and all catalog and connection access is granted on domain buckets (Spec 05).
 - **Reuse the project suffix:** The catalog root bucket reuses the platform project's random `-xxxx` suffix instead of adding a second random resource.
 
 ### Done Looks Like
@@ -74,11 +73,11 @@ flowchart TB
 ### In Scope
 - Append the four lakehouse APIs to the platform's enabled services.
 - Provision the catalog root bucket, the `bronze` BigLake catalog, and the BigQuery connection in `infra/platform`.
-- Bind the catalog and connection service accounts on the catalog root bucket.
 - Add three platform inputs and eight platform outputs, with offline mocked tests.
 
 ### Out of Scope (Non-Goals)
-- **Domain buckets and their IAM:** Delivered by [Spec 05](./05_domain_bronze_layer.md).
+- **Domain buckets and their IAM:** Delivered by [Spec 05](./05_domain_bronze_layer.md), including the catalog and connection service-account bindings.
+- **Data or IAM on the catalog root bucket:** It stays empty, and no principal is granted access to it.
 - **Iceberg namespaces & tables:** Owned by Stage 2 (`sdk-lakehouse`, Mini-Spec `08`).
 - **Project-level domain principals:** Ingest service accounts, DDL principals, and owner/analyst groups belong to Mini-Spec `07`.
 - **Customer-Managed Encryption Keys (CMEK) and VPC Service Controls:** Deferred to future specs.
@@ -92,9 +91,9 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 | ID | What | Why | How |
 | :--- | :--- | :--- | :--- |
 | `REQ-01` | Lakehouse project APIs | Keeps every project API in the stack that owns the project, enabled before dependent resources | Append the 4 APIs (§4.1) to `local.platform_apis`, enabled by the existing CFF `project` module with `disable_on_destroy = false` |
-| `REQ-02` | Immutable catalog root bucket | Supplies a stable `default_location` so domain changes never recreate the catalog | CFF `gcs` module per §4.2 |
+| `REQ-02` | Catalog root bucket | Satisfies the required `default_location` without coupling the catalog to any domain | CFF `gcs` module per §4.2, with no IAM bindings |
 | `REQ-03` | BigLake catalog & BigQuery connection | Provides one open, multi-bucket Iceberg REST catalog with BigQuery queryability for every domain | `google_biglake_iceberg_catalog` and `google_bigquery_connection` per §4.3, with explicit `depends_on` on the APIs and catalog root bucket |
-| `REQ-04` | Root IAM, inputs, outputs & tests | Wires credential vending and read access, and gives Spec 05 and `sdk-lakehouse` a stable interface | Bucket IAM per §4.6, validated inputs per §4.4, outputs per §4.5, and mocked assertions in `tests/platform_composition.tftest.hcl` |
+| `REQ-04` | Inputs, outputs & tests | Gives Spec 05 and `sdk-lakehouse` a stable interface, including both service accounts for domain bucket IAM | Validated inputs per §4.4, outputs per §4.5, the access model in §4.6, and mocked assertions in `tests/platform_composition.tftest.hcl` |
 
 ---
 
@@ -118,6 +117,8 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 | **Access Control** | Uniform Bucket-Level Access (UBLA) enabled · Public Access Prevention (PAP) `enforced` |
 | **Versioning / Soft Delete** | Enabled · `var.soft_delete_retention_seconds` (default 7 days) |
 | **Destroy Protection** | `force_destroy = false` (the CFF `gcs` module cannot expose `prevent_destroy`) |
+| **Contents** | None by design; every `bronze.<domain>` namespace sets its location to `<domain-bucket>/iceberg/` |
+| **IAM** | None; all data access is granted on domain buckets (Spec 05 §4.6) |
 | **Lifecycle** | None |
 | **Labels** | Spec 01 mandatory labels plus `layer = "bronze"` and `domain = "platform"` |
 
@@ -154,12 +155,12 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 | `bigquery_connection_id` | Regional connection ID | Stage 3 views |
 | `bigquery_connection_sa` | Google-managed connection SA email | Spec 05 bucket IAM |
 
-### 4.6 Catalog Root IAM
+### 4.6 Access Model
 
-| Principal | Role on Catalog Root | Purpose |
+| Principal | Catalog Root Bucket | Domain Buckets (granted in Spec 05) |
 | :--- | :--- | :--- |
-| BigLake catalog SA | `roles/storage.objectUser` | Mints downscoped vended GCS tokens |
-| BigQuery connection SA | `roles/storage.objectViewer` | Read-only access to Iceberg metadata and Parquet |
+| BigLake catalog SA | None | `roles/storage.objectUser` for vended credentials |
+| BigQuery connection SA | None | `roles/storage.objectViewer` for read-only queries |
 
 ### 4.7 Consumer Payload
 
@@ -177,6 +178,7 @@ gcp.project=udp-dev-xxxx
 - **Platform-only:** Every resource in this spec is declared in `infra/platform`; none is per-domain.
 - **Stable catalog:** Adding or removing domains never changes the catalog or its root bucket.
 - **Zero idle compute:** The extension adds storage, catalog metadata, and a connection only.
+- **Empty anchor:** The catalog root bucket holds no data and has no IAM bindings.
 - **Fail-closed:** The root bucket is private and the catalog defaults to `PREVENT`.
 
 ### Failure Modes
@@ -186,6 +188,7 @@ gcp.project=udp-dev-xxxx
 | Catalog or connection planned before its API or the root bucket | Prevented by explicit `depends_on` | Deterministic first apply |
 | Invalid `catalog_name`, deletion policy, or soft-delete window | OpenTofu variable validation error | Fails before any GCP call |
 | Accidental destroy | Catalog blocked by `PREVENT`; a non-empty root bucket is blocked by `force_destroy = false` | An empty root bucket can still be destroyed, so overrides stay deliberate |
+| A namespace or table is created without its own location | The write to the catalog root bucket is denied, because no principal has access | Bronze data can only land in domain buckets |
 | Spec 05 applied in `uat`/`prod` before a `udp-gcp` release with this spec | Terragrunt `dependency` fails on missing outputs | Spec 01 release ordering holds |
 
 ---
@@ -197,6 +200,6 @@ gcp.project=udp-dev-xxxx
 | `TC-001` (`REQ-01`–`04`) | Spec 01 gates | `tofu fmt`, `tofu validate`, `tflint`, `trivy config` (`HIGH,CRITICAL`), and `tofu test` exit `0` for `infra/platform`. |
 | `TC-002` (`REQ-01`) | APIs enabled | Mocked test: the project module's services include all 4 APIs from §4.1. |
 | `TC-003` (`REQ-02`) | Catalog root hardening | Mocked test: name pattern, UBLA, PAP, versioning, 7-day soft delete, `force_destroy = false`, and `layer`/`domain` labels match §4.2. |
-| `TC-004` (`REQ-03`, `REQ-04`) | Catalog, connection & root IAM | Mocked test: catalog settings and connection match §4.3, and both §4.6 bindings exist on the root bucket. |
+| `TC-004` (`REQ-02`, `REQ-03`) | Catalog, connection & empty anchor | Mocked test: catalog settings and connection match §4.3, and no IAM resource in `infra/platform` targets the catalog root bucket. |
 | `TC-005` (`REQ-04`) | Negative validation | `expect_failures` triggers for an invalid `catalog_name`, `catalog_deletion_policy = "KEEP"`, and soft delete `< 604800`. |
 | `TC-006` (`REQ-04`) | Outputs & lockfile | All 8 §4.5 outputs exist with the documented formats, and the platform lockfile still covers `darwin_arm64` and `linux_amd64`. |
