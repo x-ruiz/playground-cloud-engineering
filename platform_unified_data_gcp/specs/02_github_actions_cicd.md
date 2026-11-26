@@ -1,4 +1,4 @@
-# Spec 03: GitHub Actions GitOps CI/CD & Tag-Based Promotion
+# Spec 02: GitHub Actions GitOps CI/CD & Tag-Based Promotion
 
 | Field | Value |
 | :--- | :--- |
@@ -7,7 +7,7 @@
 | **Component** | `.github/workflows/udp-gcp-{pr-check,apply,promote}.yml` |
 | **Stack** | GitHub Actions · GCP WIF · OpenTofu · Terragrunt · TFLint · Trivy |
 | **Archetype / Tier** | CI/CD & Trunk-Based GitOps Promotion · Full Spec (`9 REQs`, `8 TCs`) |
-| **Depends On** | [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap), [Spec 02](./02_platform_and_terragrunt_envs.md) |
+| **Depends On** | [`x-ruiz/platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap), [Spec 01](./01_platform_module_setup.md) |
 
 ---
 
@@ -218,7 +218,7 @@ sequenceDiagram
 ## 2. Scope
 
 ### In Scope
-- Align Spec 02 platform/Terragrunt layout for tagging by moving `module-versions.yaml` inside `infra/platform/`, adding `release.yaml` pins for `uat`/`prod`, and switching `uat`/`prod` Terragrunt sources to tagged Git refs with an offline-test fallback.
+- Align Spec 01 platform/Terragrunt layout for tagging by moving `module-versions.yaml` inside `infra/platform/`, adding `release.yaml` pins for `uat`/`prod`, and switching `uat`/`prod` Terragrunt sources to tagged Git refs with an offline-test fallback.
 - Implement `<repo-root>/.github/workflows/udp-gcp-pr-check.yml` with path-scoped change detection, fail-fast static/security/unit-test gates, and a read-only WIF dynamic-matrix plan job that upserts per-environment PR comments.
 - Implement `<repo-root>/.github/workflows/udp-gcp-apply.yml` with path-scoped change detection and independent, serialized `main`-only WIF apply jobs (`apply-dev`, `apply-uat`, `apply-prod`) using full GCS `.tflock` locking.
 - Implement `<repo-root>/.github/workflows/udp-gcp-promote.yml` supporting `dev-to-uat` tag cutting and `uat-to-prod` tag parity promotion via rich 1-line Promotion PRs with changelogs, diff stats, and collapsible HCL diffs.
@@ -226,7 +226,7 @@ sequenceDiagram
 ### Out of Scope (Non-Goals)
 - **Long-lived environment Git branches (`uat`, `prod`):** Explicitly rejected to prevent merge-conflict drift and cross-project monorepo bleed.
 - **Duplicating `.tf` files across environment directories:** Explicitly rejected to preserve DRY Terragrunt wrappers.
-- **Scheduled drift detection cron workflow:** Deferred to a future Spec 04+ iteration.
+- **Scheduled drift detection cron workflow:** Deferred to a future Spec 03+ iteration.
 - **Automated FinOps / Infracost PR comments:** Deferred to a future enhancement.
 - **Self-hosted runners, Atlantis, or HCP Terraform:** Uses GitHub-hosted `ubuntu-latest` runners with GCP WIF only.
 

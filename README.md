@@ -13,7 +13,7 @@ playground-cloud-engineering/
 │       └── udp-gcp-promote.yml        # Tag-based release promotion (dev -> uat -> prod)
 ├── platform_unified_data_gcp/         # OpenTofu + Terragrunt + GCP Unified Data Platform foundation
 │   ├── README.md
-│   ├── specs/                         # Spec 02 (Platform/Terragrunt), Spec 03 (CI/CD), Spec 04 (Data Lakehouse)
+│   ├── specs/                         # Spec 01 (Platform/Terragrunt), Spec 02 (CI/CD), Spec 03 (Data Lakehouse)
 │   ├── scripts/                       # CI change-detection script & offline mocked tests
 │   └── infra/
 │       ├── platform/                  # Single OpenTofu platform root sourcing tag-pinned public GitHub modules
@@ -25,7 +25,7 @@ playground-cloud-engineering/
 
 | Project | Cloud | IaC Stack | Docs | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| [platform_unified_data_gcp](./platform_unified_data_gcp/README.md) | GCP | OpenTofu + Terragrunt + GitHub Actions (WIF) | [Spec 02](./platform_unified_data_gcp/specs/02_platform_and_terragrunt_envs.md) · [Spec 03](./platform_unified_data_gcp/specs/03_github_actions_cicd.md) · [Spec 04](./platform_unified_data_gcp/specs/04_data_lakehouse_architecture.md) | Tag-pinned Cloud Foundation Fabric platform composition and DRY Terragrunt `dev`/`uat`/`prod` wrappers (consumes Org/Folder foundation from [`platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap)). |
+| [platform_unified_data_gcp](./platform_unified_data_gcp/README.md) | GCP | OpenTofu + Terragrunt + GitHub Actions (WIF) | [Spec 01](./platform_unified_data_gcp/specs/01_platform_module_setup.md) · [Spec 02](./platform_unified_data_gcp/specs/02_github_actions_cicd.md) · [Spec 03](./platform_unified_data_gcp/specs/03_data_lakehouse_architecture.md) | Tag-pinned Cloud Foundation Fabric platform composition and DRY Terragrunt `dev`/`uat`/`prod` wrappers (consumes Org/Folder foundation from [`platform_gcp_org_bootstrap`](https://github.com/x-ruiz/platform_gcp_org_bootstrap)). |
 
 ## Graduated Projects
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deterministic change detection for udp-gcp-pr-check.yml and udp-gcp-apply.yml (Spec 03 REQ-03).
+# Deterministic change detection for udp-gcp-pr-check.yml and udp-gcp-apply.yml (Spec 02 REQ-03).
 #
 # Reads repository-relative changed file paths (one per line) on stdin and prints the affected
 # environments as a compact JSON array, ordered dev -> uat -> prod (e.g. ["dev","uat"]).

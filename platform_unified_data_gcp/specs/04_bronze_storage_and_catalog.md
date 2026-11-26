@@ -1,4 +1,4 @@
-# Spec 05: Domain Manifest, Bronze Storage & BigLake Catalog
+# Spec 04: Domain Manifest, Bronze Storage & BigLake Catalog
 
 | Field | Value |
 | :--- | :--- |
@@ -7,7 +7,7 @@
 | **Component** | `platform_unified_data_gcp/lakehouse/{schemas, domains}` · `platform_unified_data_gcp/infra/lakehouse/{stack, envs}` |
 | **Stack** | OpenTofu `>= 1.12.2` · Terragrunt `>= 0.72` · `google ~> 8.10` · CFF `v60.0.0` · JSON Schema Draft 2020-12 |
 | **Archetype / Tier** | Infrastructure-as-Code & GitOps · Mini-Spec (`9 REQs`, `9 TCs`) |
-| **Depends On** | [Spec 02](./02_platform_and_terragrunt_envs.md), [Spec 04](./04_data_lakehouse_architecture.md) |
+| **Depends On** | [Spec 01](./01_platform_module_setup.md), [Spec 03](./03_data_lakehouse_architecture.md) |
 | **Related** | `sdk_lakehouse/specs/05_iceberg_gcp_biglake_plugin.md` (`gcp_biglake` SPI) |
 
 ---
@@ -15,14 +15,14 @@
 ## 1. Overview & Design
 
 ### TL;DR
-Spec 04 splits the lakehouse into a 3-stage pipeline: **Stage 1 (OpenTofu)** provisions durable storage and catalog foundations, **Stage 2 (`sdk-lakehouse`)** manages Apache Iceberg namespaces and tables over the BigLake Representational State Transfer (REST) Application Programming Interface (API), and **Stage 3** deploys Silver and Gold views. This Mini-Spec defines the cloud-agnostic **`domain.yaml` manifest contract** (validated via JavaScript Object Notation (JSON) Schema and OpenTofu, seeded with `football`) and the Stage 1 foundation (`infra/lakehouse/`): an isolated Terragrunt stack per environment that parses `lakehouse/domains/*/domain.yaml` to provision **one hardened Google Cloud Storage (GCS) bucket per Data Mesh domain** (`raw/`, `quarantine/`, and `iceberg/` prefixes), a lightweight catalog root bucket, a multi-bucket BigLake Iceberg REST Catalog (`CATALOG_TYPE_BIGLAKE`), and a BigQuery Cloud Resource connection—with `$0/mo` idle compute.
+Spec 03 splits the lakehouse into a 3-stage pipeline: **Stage 1 (OpenTofu)** provisions durable storage and catalog foundations, **Stage 2 (`sdk-lakehouse`)** manages Apache Iceberg namespaces and tables over the BigLake Representational State Transfer (REST) Application Programming Interface (API), and **Stage 3** deploys Silver and Gold views. This Mini-Spec defines the cloud-agnostic **`domain.yaml` manifest contract** (validated via JavaScript Object Notation (JSON) Schema and OpenTofu, seeded with `football`) and the Stage 1 foundation (`infra/lakehouse/`): an isolated Terragrunt stack per environment that parses `lakehouse/domains/*/domain.yaml` to provision **one hardened Google Cloud Storage (GCS) bucket per Data Mesh domain** (`raw/`, `quarantine/`, and `iceberg/` prefixes), a lightweight catalog root bucket, a multi-bucket BigLake Iceberg REST Catalog (`CATALOG_TYPE_BIGLAKE`), and a BigQuery Cloud Resource connection—with `$0/mo` idle compute.
 
 ### Architecture
 
 ```mermaid
 %%{init: {"theme": "base", "themeCSS": "svg { background-color: #09090B !important; border-radius: 8px; }", "themeVariables": {"darkMode": true, "background": "#09090B", "mainBkg": "#18181B", "textColor": "#F4F4F5", "primaryColor": "#18181B", "primaryTextColor": "#F4F4F5", "primaryBorderColor": "#7C3AED", "lineColor": "#A855F7", "secondaryColor": "#16141F", "tertiaryColor": "#0F0F14", "edgeLabelBackground": "#18181B", "clusterBkg": "#0F0F14", "clusterBorder": "#52525B", "titleColor": "#D8B4FE", "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif", "fontSize": "13px"}, "flowchart": {"curve": "basis", "nodeSpacing": 42, "rankSpacing": 56, "padding": 14}}}%%
 flowchart TB
-    subgraph Upstream["1. Upstream Inputs (Spec 02 & Domain Manifests)"]
+    subgraph Upstream["1. Upstream Inputs (Spec 01 & Domain Manifests)"]
         Plat["infra/envs/dev · uat · prod\nRemote State Outputs\nproject_id · project_number · region"]
         Manifests["lakehouse/domains/*/domain.yaml\nJSON Schema v1 · Cloud-Agnostic\nSeed: football"]
     end
@@ -158,9 +158,9 @@ flowchart TB
 ### Out of Scope (Non-Goals)
 - **Separate shared landing bucket:** Raw payloads and quarantined records live inside each domain's dedicated bucket under `raw/` and `quarantine/` prefixes—no shared cross-domain landing bucket is provisioned.
 - **Iceberg namespaces & tables:** Strictly owned by Stage 2 (`sdk-lakehouse`), which creates namespace `bronze.<domain>` pointing at `gs://udp-<env>-<slug>-<suffix>/iceberg`.
-- **CI/CD workflows, `CODEOWNERS` gates & Silver/Gold datasets:** `udp-lakehouse-*.yml` pipelines, `CODEOWNERS` enforcement, and `silver_<domain>`/`gold_<domain>` BigQuery datasets are deferred to Mini-Spec `06`.
-- **Domain/user IAM:** Ingest Service Accounts (SAs), Data Definition Language (DDL) principals, and owner/analyst group bindings belong to Mini-Spec `07`.
-- **Streaming infrastructure & advanced security:** Spec 05 validates and surfaces `ingestion.enable_streaming`, while Publish/Subscribe (Pub/Sub) resource provisioning belongs to Mini-Spec `10`; Cloud Run jobs, Customer-Managed Encryption Keys (CMEK), and Virtual Private Cloud Service Controls (VPC-SC) are deferred to future specs.
+- **CI/CD workflows, `CODEOWNERS` gates & Silver/Gold datasets:** `udp-lakehouse-*.yml` pipelines, `CODEOWNERS` enforcement, and `silver_<domain>`/`gold_<domain>` BigQuery datasets are deferred to Mini-Spec `05`.
+- **Domain/user IAM:** Ingest Service Accounts (SAs), Data Definition Language (DDL) principals, and owner/analyst group bindings belong to Mini-Spec `06`.
+- **Streaming infrastructure & advanced security:** Spec 04 validates and surfaces `ingestion.enable_streaming`, while Publish/Subscribe (Pub/Sub) resource provisioning belongs to Mini-Spec `09`; Cloud Run jobs, Customer-Managed Encryption Keys (CMEK), and Virtual Private Cloud Service Controls (VPC-SC) are deferred to future specs.
 
 ---
 
@@ -172,7 +172,7 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 
 | ID | What | Why | How |
 | :--- | :--- | :--- | :--- |
-| `REQ-01` | Isolated Terragrunt root | Keeps lakehouse state and blast radius separate from `infra/platform` | `envs/root.hcl` pins `tofu`, generates KMS-encrypted state under `envs/<env>/lakehouse`, and mirrors Spec 02 offline/ephemeral flags |
+| `REQ-01` | Isolated Terragrunt root | Keeps lakehouse state and blast radius separate from `infra/platform` | `envs/root.hcl` pins `tofu`, generates KMS-encrypted state under `envs/<env>/lakehouse`, and mirrors Spec 01 offline/ephemeral flags |
 | `REQ-02` | Immutable env promotion | Ensures `uat`/`prod` deploy exact audited releases while `dev` iterates fast | `dev` tracks `../../stack//.` locally; `uat`/`prod` pin `udp-lakehouse-vX.Y.Z` (or `"unreleased"`) via `release.yaml` |
 | `REQ-03` | Platform output dependency | Avoids duplicating project/region config and keeps `envs/` DRY | Each env wrapper reads `project_id`, `project_number`, and `region` via Terragrunt `dependency "platform"` with offline `mock_outputs`; zero `.tf` files in `envs/` |
 | `REQ-04` | Pinned modules & API enablement | Prevents upstream drift and race conditions on first apply | `module-versions.yaml` pins CFF via OpenTofu Early Evaluation; 4 GCP APIs enabled with `disable_on_destroy = false` before dependent resources |
@@ -190,7 +190,7 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 | `REQ-06` | Per-domain hardened GCS buckets | Gives each declared domain one isolated bucket for raw replay, quarantine, and Bronze Iceberg tables without `dev` early-deletion fees | CFF `gcs` module (`for_each = var.domains`) using DNS/S3-safe bucket slug (`_` → `-`), Uniform Bucket-Level Access (UBLA), enforced Public Access Prevention (PAP), object versioning, 7d soft delete, `domain` + resolved `cost_center` + `layer = "bronze"` labels, `force_destroy = false`, `prevent_destroy`, and prefix-scoped lifecycle (`matches_prefix = ["raw/", "quarantine/"]`) expiring at resolved `raw_retention_days` (30d Nearline only when `> 30`; zero expiry on `iceberg/`) |
 | `REQ-07` | Immutable catalog root bucket | Supplies a stable `default_location` for `CATALOG_TYPE_BIGLAKE` so adding or removing domains never recreates the catalog | CFF `gcs` module (`udp-<env>-bronze-catalog-<suffix>`, `$0` when empty) with UBLA, enforced PAP, object versioning, 7d soft delete, `domain = "platform"`, `layer = "bronze"`, `force_destroy = false`, and `prevent_destroy` |
 | `REQ-08` | BigLake REST catalog & BQ connection | Provides an open multi-bucket Iceberg REST catalog with downscoped credentials and BigQuery queryability | `google_biglake_iceberg_catalog` (`bronze`, `CATALOG_TYPE_BIGLAKE`, `default_location` = catalog root, vended credentials, `PREVENT`) + regional `google_bigquery_connection` (`cloud_resource`) |
-| `REQ-09` | Infra-wiring IAM, outputs & tests | Unblocks Stage 2 (`sdk-lakehouse`) and downstream specs (`06`–`10`) with offline CI verification | Bucket IAM bindings on catalog root + all domain buckets (§4.6), SDK-ready outputs including resolved per-domain metadata (§4.5), multi-platform `.terraform.lock.hcl`, and mocked `tests/bronze_storage.tftest.hcl` |
+| `REQ-09` | Infra-wiring IAM, outputs & tests | Unblocks Stage 2 (`sdk-lakehouse`) and downstream specs (`05`–`09`) with offline CI verification | Bucket IAM bindings on catalog root + all domain buckets (§4.6), SDK-ready outputs including resolved per-domain metadata (§4.5), multi-platform `.terraform.lock.hcl`, and mocked `tests/bronze_storage.tftest.hcl` |
 
 ---
 
@@ -235,7 +235,7 @@ Every domain declares `lakehouse/domains/<domain>/domain.yaml`. The schema (`lak
 | `description` | `string` | *required* | 10–500 chars summarizing domain scope |
 | `cost_center` | `string` | optional · `var.cost_center` | Optional per-domain FinOps billing label override |
 | `storage.raw_retention_days` | `integer` | optional · `var.default_raw_retention_days` | `7..3650`; overrides env default for `raw/` & `quarantine/` only |
-| `ingestion.enable_streaming` | `boolean` | optional · `false` | Opt-in streaming switch consumed by Mini-Spec `10` |
+| `ingestion.enable_streaming` | `boolean` | optional · `false` | Opt-in streaming switch consumed by Mini-Spec `09` |
 
 #### Manifest-to-Infrastructure Derivation Rules
 
@@ -335,7 +335,7 @@ Every domain declares `lakehouse/domains/<domain>/domain.yaml`. The schema (`lak
 | :--- | :--- | :--- |
 | `catalog_root_bucket_name` | `udp-<env>-bronze-catalog-<suffix>` | Catalog `default_location` & audit |
 | `catalog_root_bucket_uri` | `gs://udp-<env>-bronze-catalog-<suffix>` | BigLake `default_location` |
-| `domain_buckets` | Map `<domain>` → `{ name, uri, raw_uri, quarantine_uri, iceberg_uri, raw_retention_days, enable_streaming }` | Ingest jobs, Mini-Specs `06`–`10` & `sdk-lakehouse` namespace locations |
+| `domain_buckets` | Map `<domain>` → `{ name, uri, raw_uri, quarantine_uri, iceberg_uri, raw_retention_days, enable_streaming }` | Ingest jobs, Mini-Specs `05`–`09` & `sdk-lakehouse` namespace locations |
 | `biglake_catalog_name` | `bronze` | `sdk-lakehouse` / CI |
 | `biglake_warehouse_uri` | `bl://projects/<project_id>/catalogs/<catalog>` | `sdk-lakehouse` (`warehouse`) |
 | `biglake_rest_uri` | `https://biglake.googleapis.com/iceberg/v1/restcatalog` | Iceberg REST clients |
@@ -384,7 +384,7 @@ gcp.project=udp-dev-xxxx
 
 ### Key Invariants
 - **Manifest-to-directory parity & cloud neutrality:** Every `domain.yaml` must match its parent directory name (`<domain>`), pass `domain.schema.json` with `additionalProperties: false`, and contain zero cloud-specific keys; bucket names always normalize `_` → `-`.
-- **Zero idle compute:** The stack provisions storage, catalog metadata, and a BigQuery connection only, keeping idle compute at `$0/mo` regardless of `enable_streaming` (streaming resources belong to Mini-Spec `10`).
+- **Zero idle compute:** The stack provisions storage, catalog metadata, and a BigQuery connection only, keeping idle compute at `$0/mo` regardless of `enable_streaming` (streaming resources belong to Mini-Spec `09`).
 - **Fail-closed security & teardown:** Every bucket and catalog defaults to private access and accidental-destroy protection unless explicitly overridden (§4.3).
 - **Prefix lifecycle isolation:** GCS expiry rules match strictly `raw/` and `quarantine/` prefixes; objects under `iceberg/` are never expired by GCS lifecycle policies.
 - **No `dev` Nearline penalty:** The 30-day Nearline transition on `raw/` and `quarantine/` is omitted whenever a domain's effective `raw_retention_days <= 30`.

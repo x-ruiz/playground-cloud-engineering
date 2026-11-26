@@ -1,6 +1,6 @@
 name: UDP GCP — Promote Platform Release (dev -> uat -> prod)
 
-# Spec 03 REQ-07: single linear release train of immutable annotated tags (udp-gcp-vX.Y.Z).
+# Spec 02 REQ-07: single linear release train of immutable annotated tags (udp-gcp-vX.Y.Z).
 #   dev-to-uat : cut (or reuse) a tag on main HEAD and open a 1-line PR bumping envs/uat/release.yaml
 #   uat-to-prod: promote the exact tag running in uat by opening a 1-line PR bumping envs/prod/release.yaml
 # Holds zero GCP permissions; the Promotion PR (plan comment + HCL diff) is the approval gate.
