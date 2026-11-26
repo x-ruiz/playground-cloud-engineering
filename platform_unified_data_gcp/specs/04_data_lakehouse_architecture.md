@@ -28,37 +28,105 @@ Org bootstrap (`platform_gcp_org_bootstrap`) and Specs 02–03 deliver per-envir
 ### 2.1 Data Mesh Topology
 
 ```mermaid
+%%{init: {"theme": "base", "themeCSS": "svg { background-color: #09090B !important; border-radius: 8px; }", "themeVariables": {"darkMode": true, "background": "#09090B", "mainBkg": "#18181B", "textColor": "#F4F4F5", "primaryColor": "#18181B", "primaryTextColor": "#F4F4F5", "primaryBorderColor": "#7C3AED", "lineColor": "#A855F7", "secondaryColor": "#16141F", "tertiaryColor": "#0F0F14", "edgeLabelBackground": "#18181B", "clusterBkg": "#0F0F14", "clusterBorder": "#52525B", "titleColor": "#D8B4FE", "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif", "fontSize": "13px"}, "flowchart": {"curve": "basis", "nodeSpacing": 42, "rankSpacing": 56, "padding": 14}}}%%
 flowchart TB
-    subgraph GOV["Federated Computational Governance (global policies as CI checks)"]
-        POL["Naming grammar · bronze metadata columns · schema compatibility<br/>lineage labels · cross-domain gold-only · domain.yaml + CODEOWNERS"]
+    subgraph GOV["1. Federated Computational Governance (CI Policy Gates)"]
+        POL["Global CI Governance Checks\nNaming Grammar · Bronze Metadata\nSchema Compat · Gold-Only Cross-Domain\ndomain.yaml + CODEOWNERS"]
     end
-    subgraph D1["Domain: football (business function, owns its data)"]
-        B1[("bronze.football<br/>(managed Iceberg)")] --> S1["silver_football<br/>(internal)"] --> G1["gold_football<br/>(data product)"]
+
+    subgraph D1["2. Domain: football (Business Function Owner)"]
+        B1[("bronze.football\nGCP-Managed Iceberg")]
+        S1["silver_football\nDomain-Internal BQ Views"]
+        G1["gold_football\nPublished Data Product"]
+        B1 ==>|"conform + dedup"| S1
+        S1 ==>|"curate product"| G1
     end
-    subgraph D2["Domain: finance (business function, owns its data)"]
-        B2[("bronze.finance<br/>(managed Iceberg)")] --> S2["silver_finance<br/>(internal)"] --> G2["gold_finance<br/>(data product)"]
+
+    subgraph D2["3. Domain: finance (Business Function Owner)"]
+        B2[("bronze.finance\nGCP-Managed Iceberg")]
+        S2["silver_finance\nDomain-Internal BQ Views"]
+        G2["gold_finance\nPublished Data Product"]
+        B2 ==>|"conform + dedup"| S2
+        S2 ==>|"curate product"| G2
     end
-    subgraph PLAT["Self-Serve Platform (infra/lakehouse + sdk-lakehouse + CI)"]
-        P["Stage 1 (OpenTofu): catalog · buckets · datasets · project-level IAM<br/>Stage 2 (sdk-lakehouse): bronze namespaces & tables via REST endpoints<br/>Stage 3 (View deploy, Spec 11): silver/gold views from shared table metadata"]
+
+    subgraph PLAT["4. Self-Serve Platform (infra/lakehouse + sdk-lakehouse + CI)"]
+        P["Stage 1 · OpenTofu: Catalog · Buckets · IAM\nStage 2 · sdk-lakehouse: Bronze REST DDL\nStage 3 · Spec 11: Silver / Gold Views"]
     end
-    G1 -->|"cross-domain consumption: product views only"| G2
-    G1 --> C["Analysts / BI"]
-    G2 --> C
-    PLAT -. provisions .-> D1
-    PLAT -. provisions .-> D2
-    GOV -. enforces .-> D1
-    GOV -. enforces .-> D2
+
+    C(["Analysts / BI Consumers\nRead gold_* Only"])
+
+    G1 -->|"cross-domain: gold views only"| G2
+    G1 ==>|"authorized product read"| C
+    G2 ==>|"authorized product read"| C
+    PLAT -.->|"provisions project-level infra"| D1
+    PLAT -.->|"provisions project-level infra"| D2
+    GOV -.->|"enforces PR policies"| D1
+    GOV -.->|"enforces PR policies"| D2
+
+    classDef core fill:#2E1065,stroke:#A855F7,stroke-width:2px,color:#F5F3FF
+    classDef service fill:#18181B,stroke:#7C3AED,stroke-width:1.5px,color:#F4F4F5
+    classDef store fill:#09090B,stroke:#C084FC,stroke-width:1.5px,color:#EDE9FE
+    classDef external fill:#27272A,stroke:#71717A,stroke-width:1.5px,color:#E4E4E7
+    classDef guard fill:#3B0764,stroke:#E879F9,stroke-width:2px,stroke-dasharray:5 3,color:#FAF5FF
+
+    class POL guard
+    class P core
+    class B1,B2 store
+    class S1,G1,S2,G2 service
+    class C external
+
+    style GOV fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
+    style D1 fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style D2 fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style PLAT fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
 ```
 
 ### 2.2 Data Flow Within One Domain
 
 ```mermaid
+%%{init: {"theme": "base", "themeCSS": "svg { background-color: #09090B !important; border-radius: 8px; }", "themeVariables": {"darkMode": true, "background": "#09090B", "mainBkg": "#18181B", "textColor": "#F4F4F5", "primaryColor": "#18181B", "primaryTextColor": "#F4F4F5", "primaryBorderColor": "#7C3AED", "lineColor": "#A855F7", "secondaryColor": "#16141F", "tertiaryColor": "#0F0F14", "edgeLabelBackground": "#18181B", "clusterBkg": "#0F0F14", "clusterBorder": "#52525B", "titleColor": "#D8B4FE", "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif", "fontSize": "13px"}, "flowchart": {"curve": "basis", "nodeSpacing": 42, "rankSpacing": 56, "padding": 14}}}%%
 flowchart LR
-    SRC["Batch sources"] --> CRJ["Cloud Run job<br/>sa-ingest-&lt;domain&gt;"] --> LAND[("landing/&lt;domain&gt;/…")] --> CRJ
-    CRJ -->|append| BRZ[("bronze.&lt;domain&gt;.&lt;entity&gt;<br/>GCP-managed Iceberg via BigLake REST<br/>catalog: OpenTofu · tables: sdk-lakehouse")]
-    EVT["Events"] --> PS["Pub/Sub (schema + DLQ)"] -->|"opt-in enable_streaming"| BRZ
-    BRZ --> SIL["silver_&lt;domain&gt;.&lt;entity&gt;<br/>conform + dedup"]
-    SIL --> CUR["gold_&lt;domain&gt;.&lt;kind&gt;__&lt;entity&gt;__*<br/>curated data product"]
+    subgraph IngestZone["1. Domain Ingestion (Batch Default · Opt-In Stream)"]
+        SRC(["Batch Sources\nAPIs · Files"])
+        CRJ["Cloud Run Job\nsa-ingest-<domain>\nZero Idle Compute"]
+        LAND[("GCS Landing Zone\nlanding/<domain>/...\nImmutable · Replayable")]
+        EVT(["Streaming Events\nReal-Time Producers"])
+        PS(["Pub/Sub Topic\nSchema Validation + DLQ"])
+    end
+
+    subgraph BronzeZone["2. Unified Managed Iceberg Bronze"]
+        BRZ[("bronze.<domain>.<entity>\nGCP-Managed Iceberg · BigLake REST\nCatalog: OpenTofu · Tables: sdk-lakehouse")]
+    end
+
+    subgraph ServeZone["3. View-First BigQuery Serving Layer"]
+        SIL["silver_<domain>.<entity>\nBQ View: Conform & Dedup\nLatest _ingested_at per _event_key"]
+        CUR["gold_<domain>.<kind>__<entity>__*\nCurated Data Product View\nAuthorized External Interface"]
+    end
+
+    SRC ==>|"raw payload"| CRJ
+    CRJ <-->|"write raw / read replay"| LAND
+    CRJ ==>|"append + metadata cols"| BRZ
+    EVT -.->|"publish event"| PS
+    PS -.->|"opt-in enable_streaming"| BRZ
+    BRZ ==>|"pruned Iceberg read"| SIL
+    SIL ==>|"domain-internal read"| CUR
+
+    classDef core fill:#2E1065,stroke:#A855F7,stroke-width:2px,color:#F5F3FF
+    classDef service fill:#18181B,stroke:#7C3AED,stroke-width:1.5px,color:#F4F4F5
+    classDef store fill:#09090B,stroke:#C084FC,stroke-width:1.5px,color:#EDE9FE
+    classDef external fill:#27272A,stroke:#71717A,stroke-width:1.5px,color:#E4E4E7
+    classDef async fill:#1E1B2E,stroke:#6B7280,stroke-width:1.25px,stroke-dasharray:4 3,color:#D4D4D8
+
+    class SRC,EVT external
+    class CRJ,SIL service
+    class PS async
+    class LAND,BRZ store
+    class CUR core
+
+    style IngestZone fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style BronzeZone fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
+    style ServeZone fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
 ```
 
 ---

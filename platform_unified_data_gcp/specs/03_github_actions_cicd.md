@@ -36,12 +36,13 @@ This spec redesigns CI/CD around **Trunk-Based GitOps with Immutable Platform Re
 ### 2.1 Trunk-Based Architecture & Blast-Radius Isolation
 
 ```mermaid
+%%{init: {"theme": "base", "themeCSS": "svg { background-color: #09090B !important; border-radius: 8px; }", "themeVariables": {"darkMode": true, "background": "#09090B", "mainBkg": "#18181B", "textColor": "#F4F4F5", "primaryColor": "#18181B", "primaryTextColor": "#F4F4F5", "primaryBorderColor": "#7C3AED", "lineColor": "#A855F7", "secondaryColor": "#16141F", "tertiaryColor": "#0F0F14", "edgeLabelBackground": "#18181B", "clusterBkg": "#0F0F14", "clusterBorder": "#52525B", "titleColor": "#D8B4FE", "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif", "fontSize": "13px"}, "flowchart": {"curve": "basis", "nodeSpacing": 42, "rankSpacing": 56, "padding": 14}}}%%
 flowchart TB
-    subgraph Repo["GitHub Monorepo (Single Trunk: main)"]
-        Platform["infra/platform/\nmain.tf + module-versions.yaml"]
-        Tag1["Immutable Git Tag\nudp-gcp-v0.1.0"]
-        Tag2["Immutable Git Tag\nudp-gcp-v0.2.0"]
-        RootHCL["infra/envs/root.hcl\nbackend + KMS encryption + provider"]
+    subgraph Repo["1. GitHub Monorepo (Single Trunk: main)"]
+        Platform["infra/platform/\nmain.tf + module-versions.yaml\nAtomic Platform Definition"]
+        Tag1(["Immutable Git Tag\nudp-gcp-v0.1.0"])
+        Tag2(["Immutable Git Tag\nudp-gcp-v0.2.0"])
+        RootHCL["infra/envs/root.hcl\nGCS Backend · KMS Encryption\nShared Provider Config"]
 
         subgraph EnvDev["infra/envs/dev/"]
             DevTG["terragrunt.hcl\nsource: ../../platform//."]
@@ -57,69 +58,117 @@ flowchart TB
             ProdTG["terragrunt.hcl\nsource: git::...//infra/platform?ref=v0.1.0"]
         end
 
-        Platform -. "tracks HEAD" .-> DevTG
-        Platform --> Tag1
-        Platform --> Tag2
-        Tag2 --> UatTG
-        Tag1 --> ProdTG
-        UatRel --> UatTG
-        ProdRel --> ProdTG
-        RootHCL --> DevTG
-        RootHCL --> UatTG
-        RootHCL --> ProdTG
+        Platform -.->|"tracks main HEAD"| DevTG
+        Platform -->|"annotated release tag"| Tag1
+        Platform -->|"annotated release tag"| Tag2
+        Tag2 -->|"immutable ref"| UatTG
+        Tag1 -->|"immutable ref"| ProdTG
+        UatRel -->|"pins version"| UatTG
+        ProdRel -->|"pins version"| ProdTG
+        RootHCL -.->|"inherits backend/KMS"| DevTG
+        RootHCL -.->|"inherits backend/KMS"| UatTG
+        RootHCL -.->|"inherits backend/KMS"| ProdTG
     end
 
-    subgraph GCP["GCP Platform Folder + KMS-Encrypted GCS State"]
-        DevGCP["Project: udp-dev-xxxx\nState: envs/dev/default.tfstate"]
-        UatGCP["Project: udp-uat-xxxx\nState: envs/uat/default.tfstate"]
-        ProdGCP["Project: udp-prod-xxxx\nState: envs/prod/default.tfstate"]
+    subgraph GCP["2. GCP Platform Folder + KMS-Encrypted GCS State"]
+        DevGCP[("Project: udp-dev-xxxx\nState: envs/dev/default.tfstate")]
+        UatGCP[("Project: udp-uat-xxxx\nState: envs/uat/default.tfstate")]
+        ProdGCP[("Project: udp-prod-xxxx\nState: envs/prod/default.tfstate")]
     end
 
-    DevTG ==> DevGCP
-    UatTG ==> UatGCP
-    ProdTG ==> ProdGCP
+    DevTG ==>|"apply-dev (main WIF)"| DevGCP
+    UatTG ==>|"apply-uat (main WIF)"| UatGCP
+    ProdTG ==>|"apply-prod (main WIF)"| ProdGCP
+
+    classDef core fill:#2E1065,stroke:#A855F7,stroke-width:2px,color:#F5F3FF
+    classDef service fill:#18181B,stroke:#7C3AED,stroke-width:1.5px,color:#F4F4F5
+    classDef store fill:#09090B,stroke:#C084FC,stroke-width:1.5px,color:#EDE9FE
+    classDef async fill:#1E1B2E,stroke:#6B7280,stroke-width:1.25px,stroke-dasharray:4 3,color:#D4D4D8
+    classDef guard fill:#3B0764,stroke:#E879F9,stroke-width:2px,stroke-dasharray:5 3,color:#FAF5FF
+
+    class Platform core
+    class Tag1,Tag2,UatRel,ProdRel guard
+    class DevTG,UatTG,ProdTG service
+    class RootHCL async
+    class DevGCP,UatGCP,ProdGCP store
+
+    style Repo fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
+    style EnvDev fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style EnvUat fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style EnvProd fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style GCP fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
 ```
 
 ### 2.2 Directory-Scoped CI/CD Routing (PR Check & Apply)
 
 ```mermaid
+%%{init: {"theme": "base", "themeCSS": "svg { background-color: #09090B !important; border-radius: 8px; }", "themeVariables": {"darkMode": true, "background": "#09090B", "mainBkg": "#18181B", "textColor": "#F4F4F5", "primaryColor": "#18181B", "primaryTextColor": "#F4F4F5", "primaryBorderColor": "#7C3AED", "lineColor": "#A855F7", "secondaryColor": "#16141F", "tertiaryColor": "#0F0F14", "edgeLabelBackground": "#18181B", "clusterBkg": "#0F0F14", "clusterBorder": "#52525B", "titleColor": "#D8B4FE", "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif", "fontSize": "13px"}, "flowchart": {"curve": "basis", "nodeSpacing": 42, "rankSpacing": 56, "padding": 14}}}%%
 flowchart LR
-    Diff["Git Diff\nPR or Push to main"] --> Detect["Job: detect-changes\nPath-Filter Matrix"]
+    subgraph Routing["1. Deterministic Path-Filter Routing"]
+        Diff(["Git Diff\nPR or Push to main"])
+        Detect["Job: detect-changes\nPath-Filter Matrix\nChecks release.yaml != unreleased"]
+        TargetDev["Target: dev"]
+        TargetUat["Target: uat"]
+        TargetProd["Target: prod"]
+        TargetAll["Target: dev + released envs"]
+        TargetNone["Target: none\nStatic Checks Only"]
 
-    Detect -->|"infra/platform/** or\ninfra/envs/dev/**"| TargetDev["Target: dev"]
-    Detect -->|"infra/envs/uat/**\n(and release != unreleased)"| TargetUat["Target: uat"]
-    Detect -->|"infra/envs/prod/**\n(and release != unreleased)"| TargetProd["Target: prod"]
-    Detect -->|"infra/envs/root.hcl"| TargetAll["Target: dev + all released envs"]
-    Detect -->|"scripts/**, specs/**,\nor docs only"| TargetNone["Target: none (Static Checks Only)"]
-
-    subgraph PR["udp-gcp-pr-check.yml (sa-tofu-plan, Read-Only WIF)"]
-        Static["static-checks\nfmt, validate, tflint, trivy, unit tests"]
-        PlanMatrix["Dynamic Matrix Plan\nAffected Envs Only (-lock=false)"]
-        PRComment["Upsert Scoped PR Plan Comments"]
-        Static --> PlanMatrix --> PRComment
+        Diff ==>|"changed files"| Detect
+        Detect -->|"infra/platform/** or\ninfra/envs/dev/**"| TargetDev
+        Detect -->|"infra/envs/uat/**\n(released only)"| TargetUat
+        Detect -->|"infra/envs/prod/**\n(released only)"| TargetProd
+        Detect -->|"infra/envs/root.hcl"| TargetAll
+        Detect -.->|"scripts/**, specs/**,\ndocs only"| TargetNone
     end
 
-    subgraph CD["udp-gcp-apply.yml (sa-tofu-apply, main-Only WIF)"]
-        ApplyDev["apply-dev\nconcurrency: udp-gcp-dev-apply"]
-        ApplyUat["apply-uat\nconcurrency: udp-gcp-uat-apply"]
-        ApplyProd["apply-prod\nconcurrency: udp-gcp-prod-apply"]
+    subgraph PR["2. udp-gcp-pr-check.yml (sa-tofu-plan, Read-Only WIF)"]
+        Static["static-checks\nfmt · validate · tflint\ntrivy · schema & unit tests"]
+        PlanMatrix["Dynamic Matrix Plan\nAffected Envs Only · -lock=false\nEphemeral State on Day 0"]
+        PRComment["Upsert Scoped PR Comments\nDedicated Per-Env Plan"]
+
+        Static ==>|"gate passed"| PlanMatrix
+        PlanMatrix -->|"upsert comment"| PRComment
     end
 
-    TargetDev --> PR
-    TargetUat --> PR
-    TargetProd --> PR
-    TargetAll --> PR
-    TargetNone --> Static
+    subgraph CD["3. udp-gcp-apply.yml (sa-tofu-apply, main-Only WIF)"]
+        ApplyDev["apply-dev\nconcurrency: udp-gcp-dev-apply\nGCS .tflock"]
+        ApplyUat["apply-uat\nconcurrency: udp-gcp-uat-apply\nGCS .tflock"]
+        ApplyProd["apply-prod\nconcurrency: udp-gcp-prod-apply\nGCS .tflock"]
+    end
 
-    TargetDev --> ApplyDev
-    TargetUat --> ApplyUat
-    TargetProd --> ApplyProd
+    TargetDev -->|"PR plan"| PR
+    TargetUat -->|"PR plan"| PR
+    TargetProd -->|"PR plan"| PR
+    TargetAll -->|"PR plan"| PR
+    TargetNone -.->|"skip GCP plan"| Static
+
+    TargetDev ==>|"push main"| ApplyDev
+    TargetUat ==>|"push main"| ApplyUat
+    TargetProd ==>|"push main"| ApplyProd
+
+    classDef core fill:#2E1065,stroke:#A855F7,stroke-width:2px,color:#F5F3FF
+    classDef service fill:#18181B,stroke:#7C3AED,stroke-width:1.5px,color:#F4F4F5
+    classDef external fill:#27272A,stroke:#71717A,stroke-width:1.5px,color:#E4E4E7
+    classDef async fill:#1E1B2E,stroke:#6B7280,stroke-width:1.25px,stroke-dasharray:4 3,color:#D4D4D8
+    classDef guard fill:#3B0764,stroke:#E879F9,stroke-width:2px,stroke-dasharray:5 3,color:#FAF5FF
+
+    class Diff external
+    class Detect core
+    class Static guard
+    class TargetDev,TargetUat,TargetProd,TargetAll,PlanMatrix,PRComment,ApplyDev,ApplyUat,ApplyProd service
+    class TargetNone async
+
+    style Routing fill:#16141F,stroke:#6D28D9,stroke-width:1.25px,stroke-dasharray:4 3,color:#C4B5FD
+    style PR fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
+    style CD fill:#0F0F14,stroke:#52525B,stroke-width:1.5px,color:#D8B4FE
 ```
 
 ### 2.3 End-to-End Promotion & Rollback Lifecycle
 
 ```mermaid
+%%{init: {"theme": "base", "themeCSS": "svg { background-color: #09090B !important; border-radius: 8px; }", "themeVariables": {"darkMode": true, "background": "#09090B", "mainBkg": "#18181B", "textColor": "#F4F4F5", "primaryColor": "#18181B", "primaryTextColor": "#F4F4F5", "primaryBorderColor": "#7C3AED", "lineColor": "#A855F7", "actorBkg": "#18181B", "actorBorder": "#7C3AED", "actorTextColor": "#F4F4F5", "actorLineColor": "#52525B", "signalColor": "#A855F7", "signalTextColor": "#E4E4E7", "labelBoxBkgColor": "#2E1065", "labelBoxBorderColor": "#A855F7", "labelTextColor": "#F5F3FF", "loopTextColor": "#D8B4FE", "noteBkgColor": "#1E1B2E", "noteBorderColor": "#6D28D9", "noteTextColor": "#EDE9FE", "activationBkgColor": "#4C1D95", "activationBorderColor": "#C084FC", "sequenceNumberColor": "#FAF5FF", "fontFamily": "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif", "fontSize": "13px"}}}%%
 sequenceDiagram
+    autonumber
     actor Eng as Engineer
     participant PR as GitHub PR (to main)
     participant CI as udp-gcp-pr-check.yml
@@ -129,34 +178,37 @@ sequenceDiagram
 
     Note over Eng,GCP: Phase 1 — Feature Development (dev only)
     Eng->>PR: Open feature PR editing infra/platform/**
-    PR->>CI: detect-changes -> affected: [dev]
+    PR->>+CI: detect-changes -> affected: [dev]
     CI->>GCP: WIF sa-tofu-plan -> plan dev only
-    CI-->>PR: Post dev plan comment
+    CI-->>-PR: Post dev plan comment
     Eng->>PR: Review & Merge to main
-    PR->>CD: detect-changes -> affected: [dev]
+    PR->>+CD: detect-changes -> affected: [dev]
     CD->>GCP: WIF sa-tofu-apply -> apply dev only
+    deactivate CD
 
     Note over Eng,GCP: Phase 2 — Promote dev -> uat
-    Eng->>Promo: workflow_dispatch (dev-to-uat, bump=minor)
+    Eng->>+Promo: workflow_dispatch (dev-to-uat, bump=minor)
     Promo->>Promo: Cut annotated tag udp-gcp-v0.1.0 on main HEAD
-    Promo->>PR: Open 1-line PR updating envs/uat/release.yaml
-    PR->>CI: detect-changes -> affected: [uat]
+    Promo->>-PR: Open 1-line PR updating envs/uat/release.yaml
+    PR->>+CI: detect-changes -> affected: [uat]
     CI->>GCP: WIF sa-tofu-plan -> fetch tag v0.1.0, plan uat only
-    CI-->>PR: Post uat plan comment + commit changelog
+    CI-->>-PR: Post uat plan comment + commit changelog
     Eng->>PR: Review uat plan & Merge to main
-    PR->>CD: detect-changes -> affected: [uat]
+    PR->>+CD: detect-changes -> affected: [uat]
     CD->>GCP: WIF sa-tofu-apply -> apply uat only (tag v0.1.0)
+    deactivate CD
 
     Note over Eng,GCP: Phase 3 — Promote uat -> prod
-    Eng->>Promo: workflow_dispatch (uat-to-prod)
+    Eng->>+Promo: workflow_dispatch (uat-to-prod)
     Promo->>Promo: Read uat/release.yaml (udp-gcp-v0.1.0)
-    Promo->>PR: Open 1-line PR updating envs/prod/release.yaml
-    PR->>CI: detect-changes -> affected: [prod]
+    Promo->>-PR: Open 1-line PR updating envs/prod/release.yaml
+    PR->>+CI: detect-changes -> affected: [prod]
     CI->>GCP: WIF sa-tofu-plan -> fetch tag v0.1.0, plan prod only
-    CI-->>PR: Post prod plan comment + commit changelog
+    CI-->>-PR: Post prod plan comment + commit changelog
     Eng->>PR: Review prod plan & Merge to main
-    PR->>CD: detect-changes -> affected: [prod]
+    PR->>+CD: detect-changes -> affected: [prod]
     CD->>GCP: WIF sa-tofu-apply -> apply prod only (tag v0.1.0)
+    deactivate CD
 
     Note over Eng,GCP: Rollback — Revert 1-line prod/release.yaml PR
     Eng->>PR: git revert prod Promotion PR
