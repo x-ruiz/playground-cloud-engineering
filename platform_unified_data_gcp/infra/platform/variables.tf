@@ -156,3 +156,25 @@ variable "soft_delete_retention_seconds" {
     error_message = "soft_delete_retention_seconds must be an integer between 604800 (7d) and 7776000 (90d)."
   }
 }
+
+variable "catalog_name" {
+  description = "Env-agnostic BigLake Iceberg REST catalog name for the Bronze layer (Spec 03 ADR-03)."
+  type        = string
+  default     = "bronze"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9_-]{1,61}[a-z0-9]$", var.catalog_name))
+    error_message = "catalog_name must be 3-63 lowercase characters (letters, digits, _ or -), starting with a letter."
+  }
+}
+
+variable "catalog_deletion_policy" {
+  description = "OpenTofu deletion protection for the BigLake catalog (PREVENT by default; override explicitly for teardown)."
+  type        = string
+  default     = "PREVENT"
+
+  validation {
+    condition     = contains(["PREVENT", "DELETE", "ABANDON"], var.catalog_deletion_policy)
+    error_message = "catalog_deletion_policy must be one of: PREVENT, DELETE, ABANDON."
+  }
+}

@@ -196,3 +196,30 @@ module "catalog_root_bucket" {
     domain = "platform"
   })
 }
+
+# Spec 04 REQ-03: one env-agnostic, multi-bucket BigLake Iceberg REST catalog for Bronze.
+# Each bronze.<domain> namespace sets its own location in a domain bucket (Spec 05);
+# the catalog root bucket only satisfies the required default_location.
+resource "google_biglake_iceberg_catalog" "bronze" {
+  project          = module.project.project_id
+  name             = var.catalog_name
+  catalog_type     = "CATALOG_TYPE_BIGLAKE"
+  default_location = "gs://${module.catalog_root_bucket.name}"
+  credential_mode  = "CREDENTIAL_MODE_VENDED_CREDENTIALS"
+  deletion_policy  = var.catalog_deletion_policy
+
+  depends_on = [module.project, module.catalog_root_bucket]
+}
+
+# Spec 04 REQ-03: regional Cloud Resource connection for BigQuery reads of Bronze Iceberg tables.
+resource "google_bigquery_connection" "bronze" {
+  project       = module.project.project_id
+  connection_id = "udp-${var.environment}-bronze-conn"
+  location      = var.region
+  friendly_name = "udp-${var.environment}-bronze-conn"
+  description   = "BigQuery read access to Bronze Iceberg tables in domain buckets (Spec 04)."
+
+  cloud_resource {}
+
+  depends_on = [module.project, module.catalog_root_bucket]
+}
