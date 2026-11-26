@@ -180,7 +180,9 @@ run "catalog_root_bucket_hardening" {
   assert {
     condition = (
       module.catalog_root_bucket.bucket.labels["managed_by"] == "opentofu" &&
+      module.catalog_root_bucket.bucket.labels["platform"] == "unified-data-platform" &&
       module.catalog_root_bucket.bucket.labels["environment"] == "dev" &&
+      module.catalog_root_bucket.bucket.labels["cost_center"] == "engineering-playground" &&
       module.catalog_root_bucket.bucket.labels["layer"] == "bronze" &&
       module.catalog_root_bucket.bucket.labels["domain"] == "platform"
     )
@@ -197,4 +199,120 @@ run "reject_soft_delete_below_minimum" {
   }
 
   expect_failures = [var.soft_delete_retention_seconds]
+}
+
+# Spec 04 TC-004 / TC-006: catalog, connection, and shared outputs.
+# Computed values (service accounts, connection ID) need a mocked apply; nothing real is created.
+# Top-level attributes are overridden with fixed values. OpenTofu cannot set nested blocks such as
+# cloud_resource through overrides or mock defaults, so the connection SA output is checked for
+# wiring to the resource attribute instead of an exact value.
+run "catalog_connection_and_outputs" {
+  command = apply
+
+  override_resource {
+    target = google_biglake_iceberg_catalog.bronze
+    values = {
+      biglake_service_account = "service-987654321098@gcp-sa-biglake.iam.gserviceaccount.com"
+    }
+  }
+
+  override_resource {
+    target = google_bigquery_connection.bronze
+    values = {
+      id = "projects/udp-dev-test-e5f6/locations/us-central1/connections/udp-dev-bronze-conn"
+    }
+  }
+
+  assert {
+    condition = (
+      google_biglake_iceberg_catalog.bronze.name == "bronze" &&
+      google_biglake_iceberg_catalog.bronze.catalog_type == "CATALOG_TYPE_BIGLAKE" &&
+      google_biglake_iceberg_catalog.bronze.default_location == "gs://udp-dev-bronze-catalog-e5f6" &&
+      google_biglake_iceberg_catalog.bronze.credential_mode == "CREDENTIAL_MODE_VENDED_CREDENTIALS" &&
+      google_biglake_iceberg_catalog.bronze.deletion_policy == "PREVENT"
+    )
+    error_message = "Catalog must be bronze, CATALOG_TYPE_BIGLAKE, rooted at the catalog root bucket, with vended credentials and PREVENT."
+  }
+
+  assert {
+    condition = (
+      google_bigquery_connection.bronze.connection_id == "udp-dev-bronze-conn" &&
+      google_bigquery_connection.bronze.location == "us-central1" &&
+      length(google_bigquery_connection.bronze.cloud_resource) == 1
+    )
+    error_message = "BigQuery connection must be udp-<env>-bronze-conn, regional, and of type cloud_resource."
+  }
+
+  assert {
+    condition = (
+      output.catalog_root_bucket_name == "udp-dev-bronze-catalog-e5f6" &&
+      output.catalog_root_bucket_uri == "gs://udp-dev-bronze-catalog-e5f6" &&
+      output.biglake_catalog_name == "bronze" &&
+      output.biglake_warehouse_uri == "bl://projects/udp-dev-test-e5f6/catalogs/bronze" &&
+      output.biglake_rest_uri == "https://biglake.googleapis.com/iceberg/v1/restcatalog" &&
+      output.biglake_service_account == "service-987654321098@gcp-sa-biglake.iam.gserviceaccount.com" &&
+      output.bigquery_connection_id == "projects/udp-dev-test-e5f6/locations/us-central1/connections/udp-dev-bronze-conn" &&
+      output.bigquery_connection_sa == google_bigquery_connection.bronze.cloud_resource[0].service_account_id &&
+      length(output.bigquery_connection_sa) > 0
+    )
+    error_message = "All 8 Spec 04 §4.5 outputs must be exported with the documented formats."
+  }
+}
+
+# Spec 04 TC-005: reject invalid catalog inputs.
+run "reject_invalid_catalog_name" {
+  command = plan
+
+  variables {
+    catalog_name = "Bronze Layer"
+  }
+
+  expect_failures = [var.catalog_name]
+}
+
+run "reject_invalid_catalog_deletion_policy" {
+  command = plan
+
+  variables {
+    catalog_deletion_policy = "KEEP"
+  }
+
+  expect_failures = [var.catalog_deletion_policy]
+}
+
+# Spec 04 TC-004: the catalog root bucket is an empty anchor with no IAM. The CFF gcs module exposes
+# no IAM outputs, so this guards the configuration itself: no storage IAM resources anywhere in the
+# platform stack, and no iam* inputs passed to the catalog_root_bucket module.
+run "catalog_root_bucket_has_no_iam" {
+  command = plan
+
+  assert {
+    condition = (
+      module.catalog_root_bucket.name == "udp-dev-bronze-catalog-e5f6" &&
+      length(regexall("google_storage_bucket_iam", join("\n", [for f in fileset(".", "*.tf") : file(f)]))) == 0 &&
+      length(regexall("(?m)^\\s*iam[a-z_]*\\s*=", regex("module \"catalog_root_bucket\" \\{[\\s\\S]*?\\n\\}", file("main.tf")))) == 0
+    )
+    error_message = "The catalog root bucket must exist with no IAM: no google_storage_bucket_iam_* resources and no iam* module inputs."
+  }
+}
+
+# Spec 04 TC-005 edges: soft delete above 90 days and a catalog_name ending in a separator.
+run "reject_soft_delete_above_maximum" {
+  command = plan
+
+  variables {
+    soft_delete_retention_seconds = 7776001
+  }
+
+  expect_failures = [var.soft_delete_retention_seconds]
+}
+
+run "reject_catalog_name_trailing_separator" {
+  command = plan
+
+  variables {
+    catalog_name = "bronze-"
+  }
+
+  expect_failures = [var.catalog_name]
 }
