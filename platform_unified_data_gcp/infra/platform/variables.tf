@@ -145,3 +145,14 @@ variable "iap_ssh_target_tags" {
     error_message = "iap_ssh_target_tags must contain at least one network tag."
   }
 }
+
+variable "soft_delete_retention_seconds" {
+  description = "GCS soft delete retention window in seconds for the catalog root bucket (7 to 90 days)."
+  type        = number
+  default     = 604800
+
+  validation {
+    condition     = floor(var.soft_delete_retention_seconds) == var.soft_delete_retention_seconds && var.soft_delete_retention_seconds >= 604800 && var.soft_delete_retention_seconds <= 7776000
+    error_message = "soft_delete_retention_seconds must be an integer between 604800 (7d) and 7776000 (90d)."
+  }
+}

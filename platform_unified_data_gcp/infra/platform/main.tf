@@ -22,7 +22,16 @@ locals {
     "serviceusage.googleapis.com",
     "monitoring.googleapis.com",
     "billingbudgets.googleapis.com",
+    # Lakehouse (Spec 04): catalog root & domain buckets, BigLake REST catalog, BigQuery + connection.
+    "storage.googleapis.com",
+    "biglake.googleapis.com",
+    "bigquery.googleapis.com",
+    "bigqueryconnection.googleapis.com",
   ]
+
+  # Spec 04: required default_location for the CATALOG_TYPE_BIGLAKE catalog. Holds no data and has
+  # no IAM bindings; every bronze.<domain> namespace sets its own location in a domain bucket.
+  catalog_root_bucket_name = "udp-${var.environment}-bronze-catalog-${random_id.project_suffix.hex}"
 
   vpc_name            = "udp-${var.environment}-vpc"
   primary_subnet_name = "${local.vpc_name}-${var.region}-primary"
@@ -166,4 +175,24 @@ module "budget" {
   ]
 
   depends_on = [module.project]
+}
+
+# Spec 04 REQ-02: catalog root bucket (empty anchor for the BigLake catalog default_location).
+module "catalog_root_bucket" {
+  source = "git::${local.cff_repository}//modules/gcs?ref=${local.cff_version}"
+
+  project_id                  = module.project.project_id
+  name                        = local.catalog_root_bucket_name
+  location                    = var.region
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  versioning                  = true
+  soft_delete_retention       = var.soft_delete_retention_seconds
+  force_destroy               = false
+
+  labels = merge(local.mandatory_labels, {
+    layer  = "bronze"
+    domain = "platform"
+  })
 }
