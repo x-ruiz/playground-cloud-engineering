@@ -72,12 +72,16 @@ generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"
   contents  = <<-EOF
+    # user_project_override: bill API quota to the env project each resource targets, not the
+    # CI identity's seed project (Spec 01 §4.6). Workload APIs live only on env projects.
     provider "google" {
-      region = "${local.region}"
+      region                = "${local.region}"
+      user_project_override = true
     }
 
     provider "google-beta" {
-      region = "${local.region}"
+      region                = "${local.region}"
+      user_project_override = true
     }
   EOF
 }
