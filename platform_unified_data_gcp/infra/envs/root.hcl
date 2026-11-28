@@ -105,6 +105,5 @@ inputs = {
       "biglake.googleapis.com",
       "bigquery.googleapis.com",
       "bigqueryconnection.googleapis.com",
-      "cloudresourcemanager.googleapis.com" # Needed to read or edit the env projects when running plan or apply
-    ]
+  ]
 }
