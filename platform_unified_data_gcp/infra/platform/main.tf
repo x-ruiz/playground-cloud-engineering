@@ -16,18 +16,7 @@ locals {
     cost_center = var.cost_center
   }
 
-  platform_apis = [
-    "compute.googleapis.com",
-    "iam.googleapis.com",
-    "serviceusage.googleapis.com",
-    "monitoring.googleapis.com",
-    "billingbudgets.googleapis.com",
-    # Lakehouse (Spec 04): catalog root & domain buckets, BigLake REST catalog, BigQuery + connection.
-    "storage.googleapis.com",
-    "biglake.googleapis.com",
-    "bigquery.googleapis.com",
-    "bigqueryconnection.googleapis.com",
-  ]
+
 
   # Spec 04: required default_location for the CATALOG_TYPE_BIGLAKE catalog. Holds no data and has
   # no IAM bindings; every bronze.<domain> namespace sets its own location in a domain bucket.

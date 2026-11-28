@@ -132,7 +132,7 @@ Exact parameter names, defaults, and validation patterns live once in **Section 
 | Resource Kind | Owner | Example |
 | :--- | :--- | :--- |
 | Project, billing link, labels | `infra/platform` | CFF `project` module |
-| Every project API (`services`) | `infra/platform` | `storage.googleapis.com` for any stack |
+| Every project API (`services`) | `infra/platform` | `storage.googleapis.com` for any stack, enabled on each env project (`dev`, `uat`, `prod`), never on the bootstrap seed project |
 | Project-level IAM & org-policy-style config | `infra/platform` | Project role bindings |
 | Network, firewalls, NAT, budget | `infra/platform` | `net-vpc`, `budget` |
 | Shared cross-domain resources | `infra/platform` | A catalog or connection used by all domains |
@@ -230,7 +230,7 @@ Every stack follows the same conventions: a `stack/` (or `platform/`) module wit
 | :--- | :--- |
 | `backend.tf` | `backend "gcs"` on `UDP_GCP_STATE_BUCKET`, `prefix = "envs/<env>"` |
 | `encryption.tf` | Enforced `gcp_kms` + `aes_gcm` state and plan encryption from `UDP_GCP_STATE_KMS_KEY_ID` |
-| `provider.tf` | `google` and `google-beta` bound to the region |
+| `provider.tf` | `google` and `google-beta` bound to the region, with `user_project_override = true` so every API call bills quota to the env project it targets, not the CI identity's seed project |
 | `UDP_GCP_PLATFORM_REPO` | Sets `platform_git_source` in one place for graduation portability |
 | `UDP_GCP_OFFLINE_TEST` | Disables remote state and uses the local module for offline checks |
 | `UDP_GCP_EPHEMERAL_PLAN_STATE` | Disables remote state for a read-only PR plan before the first apply |
@@ -270,6 +270,7 @@ platform_version: "unreleased"
 - **Immutable pinning:** Upstream versions and `platform_version` always match their regexes; floating branches are forbidden.
 - **Environment isolation on one trunk:** Changes to `infra/platform/**` reach `dev` only until a tag is promoted to `uat`/`prod`.
 - **No local modules or wrapper code:** Neither `infra/modules/` nor any `.tf` file under `infra/envs/` exists.
+- **API calls stay in the env project:** Quota for every Google API call is charged to the target env project, so workload APIs are enabled only there and the seed project never needs them.
 - **Fail-closed state encryption:** Remote state is always KMS-encrypted; it is disabled only by `UDP_GCP_OFFLINE_TEST` or `UDP_GCP_EPHEMERAL_PLAN_STATE`.
 - **`$0/mo` idle network:** Default inputs create no Cloud NAT and no flow logs.
 
@@ -281,6 +282,7 @@ platform_version: "unreleased"
 | Missing key in `module-versions.yaml` | Early Evaluation error at `init` | No state mutation |
 | `uat`/`prod` plan while `release.yaml` is `"unreleased"` | CI skips the env; a local run fails on `?ref=unreleased` | No accidental provisioning |
 | Missing state bucket or KMS key env var | Terragrunt `get_env()` fails | Fails closed before remote state init |
+| An API call is billed to the CI identity's seed project instead of the env project | `403 SERVICE_DISABLED` naming the seed project, even though the API is on in the env project | Prevented by `user_project_override = true` in `provider.tf` |
 | Domain stack declares an API or project IAM | Review and `TC-007` fail | Ownership model holds |
 | Accidental project destroy | `deletion_policy = "PREVENT"` error | Teardown needs an explicit override |
 
@@ -293,7 +295,7 @@ platform_version: "unreleased"
 | `TC-001` (`REQ-04`, `REQ-06`) | Format, validate, lint & scan | `tofu fmt`, `terragrunt hcl fmt`, `tofu validate`, offline `terragrunt validate`, `tflint`, and `trivy config` exit `0`. |
 | `TC-002` (`REQ-01`, `REQ-05`) | Wrapper & module hygiene | `infra/modules/` does not exist, `infra/envs/` has zero `.tf` files, and `infra/platform/*.tf` has no hardcoded `?ref=v...` literals. |
 | `TC-003` (`REQ-01`, `REQ-05`) | Version & release manifest audit | `module-versions.yaml` and both `release.yaml` files are valid YAML matching their §4.7 regexes. |
-| `TC-004` (`REQ-04`, `REQ-05`) | Source & state resolution | `terragrunt render --json` shows the local source with `envs/dev`, tagged sources with `envs/uat` and `envs/prod`, KMS encryption, and both providers. |
+| `TC-004` (`REQ-04`, `REQ-05`) | Source & state resolution | `terragrunt render --json` shows the local source with `envs/dev`, tagged sources with `envs/uat` and `envs/prod`, KMS encryption, and both providers with `user_project_override = true`. |
 | `TC-005` (`REQ-02`, `REQ-06`, `REQ-07`) | Mocked composition test | `tofu test` wires all 5 modules from `module-versions.yaml` and rejects a bad `environment`, CIDR, and non-positive budget. |
 | `TC-006` (`REQ-06`) | Lockfile & portability | The lockfile covers `darwin_arm64` and `linux_amd64`; `platform_git_source` is defined only in `root.hcl`. |
 | `TC-007` (`REQ-03`) | Ownership boundary | No `google_project_service`, `google_project_iam_*`, or `google_project` resource exists in any stack outside `infra/platform`. |

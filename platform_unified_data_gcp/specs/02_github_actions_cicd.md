@@ -293,6 +293,23 @@ All three workflows declare top-level `permissions: {}` and grant only the job-l
 | `udp-gcp-apply.yml` | `apply-{dev,uat,prod}` | `contents: read`, `id-token: write` | `main`-only WIF apply auth and private tag fetch |
 | `udp-gcp-promote.yml` | `promote` | `contents: write`, `pull-requests: write` | Push annotated tag and open Promotion PR |
 
+#### GCP Authentication (`google-github-actions/auth@v2`)
+
+The `plan` and `apply-*` jobs authenticate keylessly. GitHub issues an OpenID Connect (OIDC) token (`id-token: write`), and the auth step exchanges it through `UDP_GCP_WIF_PROVIDER` to act as `UDP_GCP_PLAN_SA` or `UDP_GCP_APPLY_SA`. With its defaults (`create_credentials_file: true`, `export_environment_variables: true`), the step writes `gha-creds-<hash>.json` into the workspace and exports the variables below. The file is a credential *configuration* that tells Google client libraries how to fetch short-lived tokens; it contains no key, and the action deletes it when the job ends.
+
+| Exported Variable | Consumer | Value |
+| :--- | :--- | :--- |
+| `GOOGLE_APPLICATION_CREDENTIALS` | OpenTofu `google`/`google-beta` providers | Path to `gha-creds-<hash>.json` |
+| `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` | `gcloud` (e.g., the remote-state existence check) | Same file |
+| `GOOGLE_GHA_CREDS_PATH` | The auth action's own cleanup | Same file |
+| `GOOGLE_CLOUD_PROJECT` · `GCP_PROJECT` | Client defaults | The service account's home project, i.e. the bootstrap seed project |
+
+| Rule | Detail |
+| :--- | :--- |
+| Quota project | Because the default project is the seed project, the generated providers set `user_project_override = true` ([Spec 01](./01_platform_module_setup.md) §4.6) so API quota is billed to the env project each call targets |
+| `serviceusage.services.use` | Both CI service accounts need it on every env project: `sa-tofu-apply` via `roles/serviceusage.serviceUsageAdmin` and `sa-tofu-plan` via `roles/serviceusage.serviceUsageConsumer`, both granted on the platform folder by `x-ruiz/platform_gcp_org_bootstrap` |
+| No workload APIs on the seed | Workload APIs are enabled only on env projects; the seed project never needs them |
+
 ### 4.3 Companion Platform Alignment & Release Pin Contract
 
 | Path | Role | Contract |
@@ -407,6 +424,7 @@ The 7 org-owned variables (`WIF_PROVIDER`, `PLAN_SA`, `APPLY_SA`, `STATE_BUCKET`
 | PR edits `infra/envs/uat/terragrunt.hcl` while `uat` is `"unreleased"` | `static-checks` runs; `plan (uat)` skips with clear log note | Prevents `git clone ?ref=unreleased` on Day 0 |
 | Pinned tag in `release.yaml` missing from Git | `terragrunt init` fails during PR plan before merge | Blocks tag typos from ever reaching `main` |
 | Non-`main` PR attempts to impersonate `sa-tofu-apply` | GCP STS rejects with `403 PERMISSION_DENIED` | Server-side WIF IAM condition enforcement |
+| CI service account lacks `serviceusage.services.use` on an env project | Plan or apply fails with `403 USER_PROJECT_DENIED` naming the env project | Folder-level `serviceUsageConsumer` (plan) / `serviceUsageAdmin` (apply) from the bootstrap repo |
 | Two rapid merges to `main` target same env | Second apply queues (`cancel-in-progress: false`) + GCS `.tflock` | Prevents concurrent state corruption |
 
 ---

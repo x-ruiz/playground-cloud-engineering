@@ -72,12 +72,16 @@ generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"
   contents  = <<-EOF
+    # user_project_override: bill API quota to the env project each resource targets, not the
+    # CI identity's seed project (Spec 01 §4.6). Workload APIs live only on env projects.
     provider "google" {
-      region = "${local.region}"
+      region                = "${local.region}"
+      user_project_override = true
     }
 
     provider "google-beta" {
-      region = "${local.region}"
+      region                = "${local.region}"
+      user_project_override = true
     }
   EOF
 }
@@ -90,4 +94,17 @@ inputs = {
   platform_name      = "unified-data-platform"
   cost_center        = "engineering-playground"
   deletion_policy    = "PREVENT"
+  platform_apis = [
+    "compute.googleapis.com",
+    "iam.googleapis.com",
+    "serviceusage.googleapis.com",
+    "monitoring.googleapis.com",
+    "billingbudgets.googleapis.com",
+    # Lakehouse (Spec 04): catalog root & domain buckets, BigLake REST catalog, BigQuery + connection.
+    "storage.googleapis.com",
+    "biglake.googleapis.com",
+    "bigquery.googleapis.com",
+    "bigqueryconnection.googleapis.com",
+    "cloudresourcemanager.googleapis.com" # Needed to read or edit the env projects when running plan or apply
+  ]
 }
